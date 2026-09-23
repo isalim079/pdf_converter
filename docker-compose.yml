@@ -1,0 +1,190 @@
+x-app-env: &app-env
+  NODE_ENV: production
+  PORT: 3050
+  LOG_LEVEL: info
+  SWAGGER_ENABLED: "false"
+  API_KEYS: ${API_KEYS:-dev-local-key:org_local:key_local}
+  DATABASE_URL: postgresql://pdf:pdf@postgres:5432/pdf_service
+  REDIS_URL: redis://redis:6379
+  GOTENBERG_URL: http://gotenberg:3000
+  S3_ENDPOINT: http://minio:9000
+  S3_REGION: us-east-1
+  S3_BUCKET: pdf-service
+  S3_ACCESS_KEY: minio
+  S3_SECRET_KEY: change-me-minio-secret
+  S3_FORCE_PATH_STYLE: "true"
+  PDF_TEMP_DIR: /tmp/pdf-service
+
+services:
+  postgres:
+    image: postgres:16.6-alpine
+    environment:
+      POSTGRES_USER: pdf
+      POSTGRES_PASSWORD: pdf
+      POSTGRES_DB: pdf_service
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pdf -d pdf_service"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2024-11-07T00-52-20Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: change-me-minio-secret
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+
+  minio-init:
+    image: quay.io/minio/mc:RELEASE.2024-11-05T11-35-21Z
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until mc alias set local http://minio:9000 minio change-me-minio-secret; do sleep 1; done
+        mc mb -p local/pdf-service || true
+    restart: "no"
+
+  gotenberg:
+    image: gotenberg/gotenberg:8.21.0
+    command:
+      - gotenberg
+      - --api-timeout=120s
+      - --libreoffice-restart-after=10
+      - --log-level=info
+    expose:
+      - "3000"
+    ports:
+      - "127.0.0.1:3000:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command:
+      - sh
+      - -c
+      - npx prisma migrate deploy && node dist/main.js
+    environment:
+      <<: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      gotenberg:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    ports:
+      - "3050:3050"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3050/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "dist/worker.js"]
+    environment:
+      <<: *app-env
+    depends_on:
+      api:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      gotenberg:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+
+  nginx:
+    image: nginx:1.28.0-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 128M
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
