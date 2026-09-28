@@ -90,6 +90,22 @@ export function curlBin(exec) {
   return firstExisting(['curl', 'C:\\Windows\\System32\\curl.exe'], exec);
 }
 
+export function wingetBin(exec) {
+  const localAppData = process.env.LOCALAPPDATA;
+  return firstExisting(
+    [
+      'winget',
+      localAppData ? join(localAppData, 'Microsoft', 'WindowsApps', 'winget.exe') : undefined,
+      'C:\\Program Files\\WindowsApps\\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\\winget.exe',
+    ],
+    exec,
+  );
+}
+
+export function chocoBin(exec) {
+  return firstExisting(['choco', 'C:\\ProgramData\\chocolatey\\bin\\choco.exe'], exec);
+}
+
 export function fontSearchDirs(platform = process.platform) {
   if (platform === 'darwin') {
     return [join(homedir(), 'Library', 'Fonts'), '/Library/Fonts', '/System/Library/Fonts'];

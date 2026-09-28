@@ -19,8 +19,8 @@ export function installHint(kind: 'libreoffice' | 'chromium'): string {
   }
   if (process.platform === 'win32') {
     return kind === 'libreoffice'
-      ? 'LibreOffice is not installed. Run yarn start to wget the Windows installer, or install LibreOffice from https://www.libreoffice.org/'
-      : 'Chrome is not installed. Run yarn start to wget the Windows installer, or install Google Chrome.';
+      ? 'LibreOffice is not installed. Run yarn start (winget) or install LibreOffice from https://www.libreoffice.org/'
+      : 'Chrome is not installed. Run yarn start (winget) or install Google Chrome.';
   }
   return kind === 'libreoffice'
     ? 'LibreOffice is not installed. Run yarn start (sudo apt) or: sudo apt-get install -y libreoffice-writer libreoffice-calc libreoffice-impress'

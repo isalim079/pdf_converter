@@ -29,7 +29,7 @@ Cover:
 - HTML assets
 - unsupported and missing files
 - temp-dir cleanup
-- ensure-runtime decision table (ready vs brew vs apt vs wget-windows)
+- ensure-runtime decision table (ready vs brew vs apt vs winget-windows)
 
 Generate tiny fixtures with `yarn fixtures`.
 

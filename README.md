@@ -4,7 +4,7 @@ Upload a document or image with multipart form data. The API converts it and ret
 
 Office files go through host LibreOffice (`soffice`). HTML goes through host Chrome/Chromium print-to-PDF. Raster images are converted locally.
 
-Docker is not used. `yarn start` and `yarn dev` detect missing LibreOffice, Chrome/Chromium, and conversion fonts, then install them for that OS: Homebrew on macOS, `sudo apt-get` on Debian/Ubuntu, wget silent installers on Windows.
+Docker is not used. `yarn start` and `yarn dev` detect missing LibreOffice, Chrome/Chromium, and conversion fonts, then install them for that OS: Homebrew on macOS, `sudo apt-get` on Debian/Ubuntu, winget (then Chocolatey, then a direct MSI download) on Windows.
 
 This is not a universal converter. It covers common office, HTML, and image formats well. Fonts, colors, and images are preserved when the source file contains them (or the host has matching fonts). Microsoft-only layout, macros, and missing fonts can still change the result.
 
@@ -101,7 +101,7 @@ curl -X POST http://localhost:3050/v1/pdf/convert \
 | macOS | `brew install --cask libreoffice google-chrome` plus Noto Bengali and Liberation font casks. If Homebrew is absent, the command to install it is printed and start exits. |
 | Debian/Ubuntu | `sudo apt-get install` LibreOffice writer/calc/impress, Chromium, and conversion fonts |
 | Other Linux | Start fails with the package list to install |
-| Windows | wget (or `curl.exe`) downloads LibreOffice and Chrome silent MSIs and font files. Run the terminal as Administrator; otherwise the exact `msiexec` command is printed. |
+| Windows | `winget` first, then Chocolatey, then wget/`curl.exe` MSI download with the latest LibreOffice version. Run the terminal as Administrator if winget is missing and MSI install is used. |
 
 ## API
 

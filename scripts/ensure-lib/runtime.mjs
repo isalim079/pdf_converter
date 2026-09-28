@@ -7,24 +7,29 @@ import { fileURLToPath } from 'node:url';
 import {
   aptGetBin,
   brewBin,
+  chocoBin,
   curlBin,
   debianLike,
   detectChromiumBin,
   detectLibreOfficeBin,
   fontsPresent,
   wgetBin,
+  wingetBin,
 } from './bins.mjs';
 import {
   adminCommandForMsi,
   brewInstallArgs,
+  chocoInstallPlan,
   copyFontsInto,
   downloadArgs,
   extractLiberationArgs,
+  fetchLatestLibreOfficeVersion,
   isElevatedWindows,
   linuxPackages,
   msiexecSilentArgs,
   windowsDownloadPlan,
   windowsFontDest,
+  wingetInstallPlan,
 } from './install.mjs';
 import { conversionReady, decideInfra } from './plan.mjs';
 import { findFreePort, probeTcp } from './probes.mjs';
@@ -140,6 +145,8 @@ export function collectFacts(env, exec = spawnSync) {
     apt: platform === 'linux' ? Boolean(aptGetBin(exec)) && debianLike((path, enc) => readFileSync(path, enc)) : false,
     wget: wgetBin(exec),
     curl: curlBin(exec),
+    winget: platform === 'win32' ? wingetBin(exec) : undefined,
+    choco: platform === 'win32' ? chocoBin(exec) : undefined,
   };
 }
 
@@ -205,8 +212,34 @@ function collectTtfFiles(rootDir) {
   return found;
 }
 
-function installWindows(missing, facts) {
-  const downloads = windowsDownloadPlan(missing);
+function runPackagePlan(command, plan) {
+  for (const item of plan) {
+    log(`Installing ${item.id} with ${command}...`);
+    try {
+      run(command, item.args);
+    } catch (error) {
+      if (item.required) {
+        throw error;
+      }
+      log(`${item.id} package is optional and was skipped: ${error instanceof Error ? error.message : error}`);
+    }
+  }
+}
+
+async function installWindows(missing, facts) {
+  if (facts.winget) {
+    log('Using winget to install missing conversion engines.');
+    runPackagePlan(facts.winget, wingetInstallPlan(missing));
+    return;
+  }
+  if (facts.choco) {
+    log('Using Chocolatey to install missing conversion engines.');
+    runPackagePlan(facts.choco, chocoInstallPlan(missing));
+    return;
+  }
+
+  const version = await fetchLatestLibreOfficeVersion();
+  const downloads = windowsDownloadPlan(missing, version);
   if (downloads.length === 0) {
     return;
   }
@@ -264,8 +297,8 @@ export async function applyPlan(plan, facts, _env) {
       installLinux(plan.missing);
       return;
     case 'install-windows':
-      log(plan.message ?? 'Installing missing engines with wget.');
-      installWindows(plan.missing, facts);
+      log(plan.message ?? 'Installing missing engines with winget, Chocolatey, or a direct download.');
+      await installWindows(plan.missing, facts);
       return;
     case 'need-homebrew':
     case 'unsupported-linux':

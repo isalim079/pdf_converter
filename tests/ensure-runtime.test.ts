@@ -7,9 +7,14 @@ import { describe, expect, it } from 'vitest';
 import { fontsPresent } from '../scripts/ensure-lib/bins.mjs';
 import {
   brewInstallArgs,
+  chocoInstallPlan,
+  fetchLatestLibreOfficeVersion,
+  libreOfficeMsiUrl,
   linuxPackages,
   msiexecSilentArgs,
+  parseLibreOfficeVersions,
   windowsDownloadPlan,
+  wingetInstallPlan,
 } from '../scripts/ensure-lib/install.mjs';
 import { conversionReady, decideInfra, missingPieces } from '../scripts/ensure-lib/plan.mjs';
 import { parseBootArg, upsertEnvFile } from '../scripts/ensure-lib/runtime.mjs';
@@ -77,10 +82,11 @@ describe('ensure decision table', () => {
     expect(plan.message).toMatch(/LibreOffice/);
   });
 
-  it('uses wget Windows installers when engines are missing', () => {
+  it('uses Windows installers when engines are missing', () => {
     const plan = decideInfra({ ...base, platform: 'win32' });
     expect(plan.action).toBe('install-windows');
     expect(plan.missing).toEqual(['libreoffice', 'chromium', 'fonts']);
+    expect(plan.message).toMatch(/winget/);
   });
 
   it('is ready on Windows when host binaries already exist', () => {
@@ -115,9 +121,45 @@ describe('ensure decision table', () => {
   });
 
   it('plans silent Windows MSI downloads for missing engines', () => {
-    const downloads = windowsDownloadPlan(['libreoffice', 'chromium']);
+    const downloads = windowsDownloadPlan(['libreoffice', 'chromium'], '26.8.0');
     expect(downloads.map((item) => item.id)).toEqual(['libreoffice', 'chromium']);
+    expect(downloads[0].url).toBe(libreOfficeMsiUrl('26.8.0'));
+    expect(downloads[0].filename).toBe('LibreOffice_26.8.0_Win_x86-64.msi');
     expect(msiexecSilentArgs('C:\\temp\\lo.msi')).toEqual(['/i', 'C:\\temp\\lo.msi', '/qn', '/norestart']);
+  });
+
+  it('picks the newest LibreOffice stable version from the directory listing', () => {
+    const html = `
+      <a href="7.6.7/">7.6.7/</a>
+      <a href="25.2.5/">25.2.5/</a>
+      <a href="26.8.0/">26.8.0/</a>
+    `;
+    expect(parseLibreOfficeVersions(html)).toEqual(['26.8.0', '25.2.5', '7.6.7']);
+  });
+
+  it('fetches the latest LibreOffice version and falls back when the index is unreachable', async () => {
+    await expect(
+      fetchLatestLibreOfficeVersion(async () => ({
+        ok: true,
+        text: async () => '<a href="26.8.0/">26.8.0/</a><a href="25.2.5/">25.2.5/</a>',
+      })),
+    ).resolves.toBe('26.8.0');
+    await expect(fetchLatestLibreOfficeVersion(async () => ({ ok: false, text: async () => '' }))).resolves.toBe(
+      '26.8.0',
+    );
+  });
+
+  it('plans winget and Chocolatey installs for missing engines', () => {
+    const winget = wingetInstallPlan(['libreoffice', 'chromium', 'fonts']);
+    expect(winget.map((item) => item.id)).toEqual(['libreoffice', 'chromium', 'fonts']);
+    expect(winget[0].args).toContain('TheDocumentFoundation.LibreOffice');
+    expect(winget[1].args).toContain('Google.Chrome');
+    expect(winget[2].required).toBe(false);
+
+    const choco = chocoInstallPlan(['libreoffice']);
+    expect(choco).toEqual([
+      { id: 'libreoffice', args: ['install', 'libreoffice-fresh', '-y', '--no-progress'], required: true },
+    ]);
   });
 
   it('detects Noto Bengali and Liberation from a fonts directory', () => {

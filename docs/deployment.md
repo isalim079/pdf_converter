@@ -21,7 +21,7 @@ yarn start
 | macOS | Probes `soffice` and Chrome. Missing pieces are installed with Homebrew casks (LibreOffice, Google Chrome, Noto Bengali, Liberation). If brew is missing, prints the Homebrew install command and exits. |
 | Debian/Ubuntu | `sudo apt-get install` LibreOffice writer/calc/impress, Chromium, and conversion fonts |
 | Other Linux | Fails with the package list |
-| Windows | wget or `curl.exe` downloads official LibreOffice and Chrome silent MSIs plus font files. Needs an elevated session for `msiexec /qn`. |
+| Windows | `winget` first, then Chocolatey, then wget/`curl.exe` downloads official LibreOffice and Chrome silent MSIs. MSI fallback needs an elevated session for `msiexec /qn`. |
 
 Set `PDF_ENSURE_SKIP=1` to skip ensure on already-provisioned hosts.
 

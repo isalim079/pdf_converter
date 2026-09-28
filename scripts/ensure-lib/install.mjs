@@ -3,14 +3,108 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-export const LIBREOFFICE_VERSION = process.env.LIBREOFFICE_VERSION ?? '25.2.5';
-
-export const LIBREOFFICE_MSI_URL =
-  process.env.LIBREOFFICE_MSI_URL ??
-  `https://download.documentfoundation.org/libreoffice/stable/${LIBREOFFICE_VERSION}/win/x86_64/LibreOffice_${LIBREOFFICE_VERSION}_Win_x86-64.msi`;
+export const LIBREOFFICE_STABLE_INDEX = 'https://download.documentfoundation.org/libreoffice/stable/';
+export const LIBREOFFICE_VERSION_FALLBACK = '26.8.0';
 
 export const CHROME_MSI_URL =
   process.env.CHROME_MSI_URL ?? 'https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi';
+
+export const WINGET_PACKAGES = {
+  libreoffice: 'TheDocumentFoundation.LibreOffice',
+  chromium: 'Google.Chrome',
+  fonts: 'Noto.NotoFonts',
+};
+
+export const CHOCO_PACKAGES = {
+  libreoffice: 'libreoffice-fresh',
+  chromium: 'googlechrome',
+  fonts: 'liberationfonts',
+};
+
+export function compareSemver(a, b) {
+  const left = a.split('.').map((part) => Number(part) || 0);
+  const right = b.split('.').map((part) => Number(part) || 0);
+  const length = Math.max(left.length, right.length);
+  for (let i = 0; i < length; i += 1) {
+    const delta = (left[i] ?? 0) - (right[i] ?? 0);
+    if (delta !== 0) {
+      return delta;
+    }
+  }
+  return 0;
+}
+
+export function parseLibreOfficeVersions(html) {
+  const found = [...String(html).matchAll(/href="(\d+\.\d+\.\d+)\//g)].map((match) => match[1]);
+  return [...new Set(found)].sort(compareSemver).reverse();
+}
+
+export function libreOfficeMsiUrl(version) {
+  if (process.env.LIBREOFFICE_MSI_URL) {
+    return process.env.LIBREOFFICE_MSI_URL;
+  }
+  return `${LIBREOFFICE_STABLE_INDEX}${version}/win/x86_64/LibreOffice_${version}_Win_x86-64.msi`;
+}
+
+export async function fetchLatestLibreOfficeVersion(fetcher = fetch) {
+  if (process.env.LIBREOFFICE_VERSION) {
+    return process.env.LIBREOFFICE_VERSION;
+  }
+  try {
+    const response = await fetcher(LIBREOFFICE_STABLE_INDEX);
+    if (!response.ok) {
+      return LIBREOFFICE_VERSION_FALLBACK;
+    }
+    const text = await response.text();
+    return parseLibreOfficeVersions(text)[0] ?? LIBREOFFICE_VERSION_FALLBACK;
+  } catch {
+    return LIBREOFFICE_VERSION_FALLBACK;
+  }
+}
+
+export function wingetInstallArgs(packageId) {
+  return [
+    'install',
+    '--id',
+    packageId,
+    '--accept-package-agreements',
+    '--accept-source-agreements',
+    '--disable-interactivity',
+    '--silent',
+  ];
+}
+
+export function wingetInstallPlan(missing) {
+  const commands = [];
+  if (missing.includes('libreoffice')) {
+    commands.push({ id: 'libreoffice', args: wingetInstallArgs(WINGET_PACKAGES.libreoffice), required: true });
+  }
+  if (missing.includes('chromium')) {
+    commands.push({ id: 'chromium', args: wingetInstallArgs(WINGET_PACKAGES.chromium), required: true });
+  }
+  if (missing.includes('fonts')) {
+    commands.push({ id: 'fonts', args: wingetInstallArgs(WINGET_PACKAGES.fonts), required: false });
+  }
+  return commands;
+}
+
+export function chocoInstallArgs(packageId) {
+  return ['install', packageId, '-y', '--no-progress'];
+}
+
+export function chocoInstallPlan(missing) {
+  const commands = [];
+  if (missing.includes('libreoffice')) {
+    commands.push({ id: 'libreoffice', args: chocoInstallArgs(CHOCO_PACKAGES.libreoffice), required: true });
+  }
+  if (missing.includes('chromium')) {
+    commands.push({ id: 'chromium', args: chocoInstallArgs(CHOCO_PACKAGES.chromium), required: true });
+  }
+  if (missing.includes('fonts')) {
+    commands.push({ id: 'fonts', args: chocoInstallArgs(CHOCO_PACKAGES.fonts), required: false });
+  }
+  return commands;
+}
 
 export const FONT_URLS = {
   notoSansBengali:
@@ -75,13 +169,13 @@ export function linuxPackages(missing) {
   return [...new Set(packages)];
 }
 
-export function windowsDownloadPlan(missing) {
+export function windowsDownloadPlan(missing, version = process.env.LIBREOFFICE_VERSION ?? LIBREOFFICE_VERSION_FALLBACK) {
   const downloads = [];
   if (missing.includes('libreoffice')) {
     downloads.push({
       id: 'libreoffice',
-      url: LIBREOFFICE_MSI_URL,
-      filename: `LibreOffice_${LIBREOFFICE_VERSION}_Win_x86-64.msi`,
+      url: libreOfficeMsiUrl(version),
+      filename: `LibreOffice_${version}_Win_x86-64.msi`,
       kind: 'msi',
     });
   }

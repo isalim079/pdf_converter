@@ -89,7 +89,7 @@ export function decideInfra(facts) {
     return {
       action: 'install-windows',
       missing,
-      message: 'Downloading and installing missing LibreOffice, Chrome, and conversion fonts with wget.',
+      message: 'Installing missing LibreOffice, Chrome, and fonts via winget (or choco / direct download).',
     };
   }
 
