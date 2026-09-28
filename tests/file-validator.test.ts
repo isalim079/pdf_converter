@@ -37,7 +37,7 @@ describe('file validator', () => {
       maxBytes: 1024 * 1024,
     });
     expect(result.extension).toBe('.doc');
-    expect(result.format.engine).toBe('gotenberg');
+    expect(result.format.engine).toBe('libreoffice');
   });
 
   it('accepts a valid DOCX package', async () => {
@@ -46,7 +46,23 @@ describe('file validator', () => {
       buffer: createMinimalDocx(),
       maxBytes: 1024 * 1024,
     });
-    expect(result.format.engine).toBe('gotenberg');
+    expect(result.format.engine).toBe('libreoffice');
+  });
+
+  it('accepts HTML, CSV, and XLSX', async () => {
+    const html = await validateUpload({
+      originalFilename: 'page.html',
+      buffer: Buffer.from('<!doctype html><html><body>Hi</body></html>'),
+      maxBytes: 1024 * 1024,
+    });
+    expect(html.format.engine).toBe('chromium');
+
+    const csv = await validateUpload({
+      originalFilename: 'rows.csv',
+      buffer: Buffer.from('a,b\n1,2\n'),
+      maxBytes: 1024 * 1024,
+    });
+    expect(csv.format.engine).toBe('libreoffice');
   });
 
   it('rejects a renamed executable', async () => {

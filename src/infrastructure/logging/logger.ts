@@ -8,15 +8,7 @@ export function createLogger() {
     level: config.LOG_LEVEL,
     base: { service: 'pdf-converter' },
     redact: {
-      paths: [
-        'req.headers.authorization',
-        'req.headers["x-api-key"]',
-        'apiKey',
-        'password',
-        'signedUrl',
-        'url',
-        'output.url',
-      ],
+      paths: ['password'],
       remove: true,
     },
     transport:

@@ -24,21 +24,22 @@ describe('image converter', () => {
     process.env.PDF_TEMP_DIR = root;
     resetConfigCache();
 
-    const jobId = 'pdf_image_test';
-    const inputPath = join(root, jobId, 'input.png');
+    const conversionId = 'pdf_image_test';
+    const inputPath = join(root, conversionId, 'input.png');
     const { mkdir, writeFile } = await import('node:fs/promises');
-    await mkdir(join(root, jobId), { recursive: true });
+    await mkdir(join(root, conversionId), { recursive: true });
     await writeFile(inputPath, PNG_1X1);
 
     const converter = new ImageConverter();
     const result = await converter.convert(
       {
-        jobId,
+        conversionId,
         filePath: inputPath,
         originalFilename: 'square.png',
         mimeType: 'image/png',
         extension: '.png',
         size: PNG_1X1.length,
+        assets: [],
       },
       parseOptions({
         page: { size: 'A4', orientation: 'auto' },

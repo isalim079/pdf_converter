@@ -11,75 +11,10 @@ export async function registerPdfRoutes(app: FastifyInstance, service: PdfServic
     {
       schema: {
         tags: ['PDF'],
-        summary: 'Enqueue a document or image conversion',
+        summary: 'Convert a document or image to PDF',
         consumes: ['multipart/form-data'],
-        security: [{ apiKey: [] }, { bearerAuth: [] }],
       },
     },
     (request, reply) => controller.convert(request, reply),
-  );
-
-  app.post(
-    '/v1/pdf/convert/sync',
-    {
-      schema: {
-        tags: ['PDF'],
-        summary: 'Convert a small file and return the PDF immediately',
-        consumes: ['multipart/form-data'],
-        security: [{ apiKey: [] }, { bearerAuth: [] }],
-      },
-    },
-    (request, reply) => controller.convertSync(request, reply),
-  );
-
-  app.get(
-    '/v1/pdf/jobs/:jobId',
-    {
-      schema: {
-        tags: ['PDF'],
-        summary: 'Get conversion job status',
-        security: [{ apiKey: [] }, { bearerAuth: [] }],
-        params: {
-          type: 'object',
-          required: ['jobId'],
-          properties: { jobId: { type: 'string' } },
-        },
-      },
-    },
-    (request, reply) => controller.getJob(request, reply),
-  );
-
-  app.get(
-    '/v1/pdf/jobs/:jobId/file',
-    {
-      schema: {
-        tags: ['PDF'],
-        summary: 'Download a completed PDF',
-        security: [{ apiKey: [] }, { bearerAuth: [] }],
-        params: {
-          type: 'object',
-          required: ['jobId'],
-          properties: { jobId: { type: 'string' } },
-        },
-      },
-    },
-    (request, reply) => controller.downloadFile(request, reply),
-  );
-
-  app.delete(
-    '/v1/pdf/jobs/:jobId',
-    {
-      schema: {
-        tags: ['PDF'],
-        summary: 'Cancel a conversion job',
-        security: [{ apiKey: [] }, { bearerAuth: [] }],
-        params: {
-          type: 'object',
-          required: ['jobId'],
-          properties: { jobId: { type: 'string' } },
-        },
-      },
-    },
-    (request, reply) => controller.deleteJob(request, reply),
   );
 }

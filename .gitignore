@@ -6,5 +6,3 @@ coverage
 *.log
 .DS_Store
 tmp
-.prisma
-prisma/generated

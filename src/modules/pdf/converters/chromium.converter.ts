@@ -7,40 +7,22 @@ import type { GotenbergClient } from '../../../infrastructure/gotenberg/client.j
 import type { ConversionInput, ConversionOptions, ConversionResult } from '../pdf.types.js';
 import type { PdfConverter } from './converter.interface.js';
 
-const OFFICE_EXTENSIONS = new Set([
-  '.doc',
-  '.docx',
-  '.docm',
-  '.dot',
-  '.dotx',
-  '.rtf',
-  '.odt',
-  '.txt',
-  '.xls',
-  '.xlsx',
-  '.xlsm',
-  '.ods',
-  '.csv',
-  '.ppt',
-  '.pptx',
-  '.pptm',
-  '.odp',
-]);
+const HTML_EXTENSIONS = new Set(['.html', '.htm']);
 
-export class GotenbergConverter implements PdfConverter {
-  readonly engine = 'libreoffice' as const;
+export class ChromiumConverter implements PdfConverter {
+  readonly engine = 'chromium' as const;
 
   constructor(private readonly client: GotenbergClient) {}
 
   supports(input: ConversionInput): boolean {
-    return OFFICE_EXTENSIONS.has(input.extension);
+    return HTML_EXTENSIONS.has(input.extension);
   }
 
   async convert(input: ConversionInput, options: ConversionOptions): Promise<ConversionResult> {
     const timeoutMs = getConfig().PDF_JOB_TIMEOUT_SECONDS * 1000;
-    const pdf = await this.client.convertOffice({
+    const pdf = await this.client.convertHtml({
       filePath: input.filePath,
-      filename: `${input.conversionId}${input.extension}`,
+      assets: input.assets,
       options,
       timeoutMs,
     });

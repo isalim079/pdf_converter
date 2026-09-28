@@ -1,6 +1,6 @@
 import { ulid } from 'ulid';
 
-export function createJobId(): string {
+export function createConversionId(): string {
   return `pdf_${ulid()}`;
 }
 

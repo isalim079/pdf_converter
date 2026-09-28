@@ -13,27 +13,14 @@ export async function registerSwagger(app: FastifyInstance, config: AppConfig): 
     openapi: {
       info: {
         title: 'PDF Conversion Service',
-        description: 'Asynchronous document and image to PDF conversion API',
+        description: 'Synchronous document and image to PDF conversion API',
         version: '1.0.0',
       },
       servers: [{ url: `http://localhost:${config.PORT}` }],
       tags: [
-        { name: 'PDF', description: 'Conversion jobs' },
+        { name: 'PDF', description: 'Direct conversion' },
         { name: 'Health', description: 'Liveness and readiness' },
       ],
-      components: {
-        securitySchemes: {
-          apiKey: {
-            type: 'apiKey',
-            in: 'header',
-            name: 'X-API-Key',
-          },
-          bearerAuth: {
-            type: 'http',
-            scheme: 'bearer',
-          },
-        },
-      },
     },
   });
 

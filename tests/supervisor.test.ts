@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { resolveChildCommands } from '../src/app/child-commands.js';
+import { resolveChildCommand } from '../src/app/child-commands.js';
 import { loadEnvFile } from '../src/app/load-env.js';
 import {
   buildGotenbergArgs,
@@ -28,30 +28,28 @@ describe('loadEnvFile', () => {
   });
 });
 
-describe('resolveChildCommands', () => {
-  it('runs compiled entrypoints in production mode', () => {
-    const commands = resolveChildCommands({
+describe('resolveChildCommand', () => {
+  it('runs the compiled API entrypoint in production mode', () => {
+    const command = resolveChildCommand({
       watch: false,
       entryDir: '/app/dist',
       projectRoot: '/app',
       execPath: '/usr/bin/node',
     });
 
-    expect(commands.api).toEqual({ command: '/usr/bin/node', args: ['/app/dist/main.js'] });
-    expect(commands.worker).toEqual({ command: '/usr/bin/node', args: ['/app/dist/worker.js'] });
+    expect(command).toEqual({ command: '/usr/bin/node', args: ['/app/dist/main.js'] });
   });
 
-  it('uses tsx watch for the API and worker in development', () => {
-    const commands = resolveChildCommands({
+  it('uses tsx watch for the API in development', () => {
+    const command = resolveChildCommand({
       watch: true,
       entryDir: join(process.cwd(), 'src'),
       projectRoot: process.cwd(),
       execPath: '/usr/bin/node',
     });
 
-    expect(commands.api.args).toContain('watch');
-    expect(commands.api.args.at(-1)).toMatch(/main\.ts$/);
-    expect(commands.worker.args.at(-1)).toMatch(/worker\.ts$/);
+    expect(command.args).toContain('watch');
+    expect(command.args.at(-1)).toMatch(/main\.ts$/);
   });
 });
 

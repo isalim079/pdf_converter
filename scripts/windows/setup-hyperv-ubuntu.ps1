@@ -11,7 +11,6 @@
   command. After the guest OS is installed, run the Linux stack inside the VM:
 
     sudo bash scripts/install-linux.sh
-    yarn prisma:migrate
     yarn build
     yarn start
 
@@ -108,6 +107,6 @@ if ($IsoPath -and (Test-Path $IsoPath)) {
 Start-VM -Name $VmName
 Write-Ensure "VM started. Complete Ubuntu setup in Hyper-V Manager, then inside the guest:"
 Write-Ensure "  sudo bash scripts/install-linux.sh"
-Write-Ensure "  yarn prisma:migrate && yarn build && yarn start"
+Write-Ensure "  yarn build && yarn start"
 Write-Ensure "Publish guest port 3050. Do not convert Office files with Windows LibreOffice."
 exit 0

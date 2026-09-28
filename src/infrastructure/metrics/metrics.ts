@@ -1,10 +1,4 @@
-import {
-  collectDefaultMetrics,
-  Counter,
-  Gauge,
-  Histogram,
-  Registry,
-} from 'prom-client';
+import { collectDefaultMetrics, Counter, Gauge, Histogram, Registry } from 'prom-client';
 
 export function createMetrics() {
   const registry = new Registry();
@@ -37,15 +31,9 @@ export function createMetrics() {
     registers: [registry],
   });
 
-  const queueDepth = new Gauge({
-    name: 'conversion_queue_depth',
-    help: 'Waiting conversion jobs',
-    registers: [registry],
-  });
-
   const activeJobs = new Gauge({
     name: 'conversion_active_jobs',
-    help: 'In-flight conversion jobs',
+    help: 'In-flight conversions',
     registers: [registry],
   });
 
@@ -55,7 +43,6 @@ export function createMetrics() {
     conversionDuration,
     conversionInputBytes,
     conversionOutputBytes,
-    queueDepth,
     activeJobs,
   };
 }

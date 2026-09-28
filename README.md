@@ -1,107 +1,62 @@
 # PDF Conversion Service
 
-Production document-to-PDF microservice. Clients upload a common office document or image; the service returns a validated PDF through a short-lived signed URL.
+Upload a document or image with multipart form data. The API converts it and returns the PDF in the same HTTP response.
 
-Conversion runs off the HTTP process. The API authenticates, validates, and enqueues. Workers convert, validate, store, and clean up.
+Office files go through Gotenberg LibreOffice. HTML goes through Gotenberg Chromium. Raster images are converted locally.
+
+This is not a universal converter. It covers common office, HTML, and image formats well. Fonts, colors, and images are preserved when the source file contains them (or the converter image has matching fonts). Microsoft-only layout, macros, and missing fonts can still change the result.
 
 ## Contents
 
-- [Features](#features)
-- [Architecture](#architecture)
+- [How conversion works](#how-conversion-works)
 - [Supported formats](#supported-formats)
-- [Tech stack](#tech-stack)
+- [Fidelity](#fidelity)
 - [Quick start](#quick-start)
-- [Configuration](#configuration)
 - [API](#api)
-- [Security](#security)
-- [Operations](#operations)
+- [Configuration](#configuration)
 - [Development](#development)
-- [Acceptance criteria](#acceptance-criteria)
 - [Documentation](#documentation)
 
-## Features
-
-- Unified `/v1` API for office documents and images
-- Asynchronous conversion by default (BullMQ + Redis)
-- Layout-preserving office conversion via Gotenberg / LibreOffice
-- Image-to-PDF via img2pdf with aspect-ratio-safe fitting
-- Magic-byte file validation and optional malware scanning
-- Private object storage with signed download URLs
-- Owner-scoped jobs, idempotency keys, and rate limits
-- Structured logs, metrics, liveness, and readiness probes
-- Horizontal worker scaling independent of the API
-
-## Architecture
+## How conversion works
 
 ```text
-                         Internet
-                            |
-                          Nginx
-                            |
-                     Node.js REST API
-                            |
-               Authentication / Validation
-                            |
-                       PostgreSQL
-                            |
-                       BullMQ Queue
-                            |
-                          Redis
-                            |
-                   PDF Conversion Worker
-                            |
-              +-------------+-------------+
-              |                           |
-       Office Documents                 Images
-              |                           |
-          Gotenberg                    img2pdf
-              |                           |
-         LibreOffice                       |
-              +-------------+-------------+
-                            |
-                       PDF Validation
-                            |
-                     Object Storage
-                    S3 / MinIO / etc.
-                            |
-                     Signed Download URL
+multipart upload
+  → validate type and size
+  → write a request-scoped temp folder
+  → route by format
+       office  → Gotenberg LibreOffice
+       HTML    → Gotenberg Chromium
+       images  → local image converter
+  → validate the PDF
+  → stream application/pdf
+  → delete the temp folder
 ```
 
-Only Nginx and the API are public. Gotenberg, Redis, PostgreSQL, and object storage stay on the private network.
+There is no authentication, job queue, database, Redis, or object storage. Temporary files live under `PDF_TEMP_DIR` for the length of the request only.
 
-Full design: [docs/architecture.md](docs/architecture.md).
+Gotenberg stays private. The Node API is the public contract.
 
 ## Supported formats
 
-| Family | Extensions | Engine | Default page size |
-| --- | --- | --- | --- |
-| Images | `.jpg` `.jpeg` `.png` | img2pdf | A4, `contain`, orientation `auto` |
-| Office | `.doc` `.docx` `.docm` `.dot` `.dotx` `.rtf` `.odt` | Gotenberg / LibreOffice | `auto` (preserve source) |
-| Text | `.txt` | LibreOffice or dedicated text path | engine default |
+| Family | Extensions | Engine |
+| --- | --- | --- |
+| Images | `.jpg` `.jpeg` `.png` `.webp` | local |
+| Word / Writer | `.doc` `.docx` `.docm` `.dot` `.dotx` `.rtf` `.odt` `.txt` | LibreOffice |
+| Excel / Calc | `.xls` `.xlsx` `.xlsm` `.ods` `.csv` | LibreOffice |
+| PowerPoint / Impress | `.ppt` `.pptx` `.pptm` `.odp` | LibreOffice |
+| HTML | `.html` `.htm` plus optional flat assets | Chromium |
 
-Planned, not in the first milestone: `.html`, `.htm`, `.md`.
+Unsupported types are rejected with `UNSUPPORTED_FILE_TYPE`.
 
-Office `pageSize=auto` keeps the source section configuration (including mixed A4/A3 and portrait/landscape). Forcing A4 is an explicit override. Images are never stretched.
+## Fidelity
 
-Bengali and mixed Bengali/English rendering is a first-class requirement. Fonts are installed in the Gotenberg image, or on the Linux host via `scripts/install-linux.sh`. Do not rely on Windows host fonts.
+- Missing fonts are substituted. Embed fonts in the document, or send font files as HTML assets, when typography must match.
+- LibreOffice is not Microsoft Office. Complex Word/Excel/PowerPoint effects, SmartArt, macros, and some embedded objects can shift.
+- Chromium prints HTML/CSS as a browser would, with backgrounds enabled. It does not convert arbitrary office files.
+- Images keep aspect ratio. They are never stretched.
+- Office `pageSize=auto` keeps the source page setup when LibreOffice supports it.
 
-## Tech stack
-
-| Layer | Choice |
-| --- | --- |
-| Runtime | Node.js 24 LTS, TypeScript (strict) |
-| API | Fastify, Zod, OpenAPI |
-| Data | PostgreSQL, Prisma |
-| Queue | BullMQ, Redis |
-| Conversion | Gotenberg + LibreOffice, img2pdf |
-| PDF checks | qpdf / pdfinfo or an equivalent library |
-| Storage | S3-compatible (MinIO locally) |
-| Auth | API key or JWT / OAuth2 |
-| Observability | Pino, Prometheus-style metrics |
-| Tests | Vitest, Fastify inject / Supertest |
-| Runtime | Docker, Nginx |
-
-Pin every dependency and container tag. Use a lockfile. Do not ship `latest` images.
+Bengali and mixed Bengali/English rendering needs fonts in the Gotenberg image (see `docker/gotenberg/Dockerfile`) or on the Linux host via `scripts/install-linux.sh`.
 
 ## Quick start
 
@@ -110,85 +65,53 @@ yarn install
 yarn start
 ```
 
-For development with reload:
+Development with reload:
 
 ```bash
 yarn install
 yarn dev
 ```
 
-`yarn start` / `yarn dev` first run `scripts/ensure-runtime.mjs`: they copy `.env` if needed, detect Linux/macOS/Windows, start or install missing Postgres/Redis/Gotenberg, then run Prisma and boot the API **and** worker together. Other apps on the machine are not stopped; busy default ports are remapped.
-
-| Environment | What ensure does |
-| --- | --- |
-| Docker daemon is up | `docker compose up -d` for any of Postgres, Redis, Gotenberg that are down |
-| Linux, no Docker | `scripts/install-linux.sh` (sudo) once, then spawn local Gotenberg |
-| macOS, no Docker | Homebrew Postgres + Redis. DOC/DOCX still need Docker Desktop or Linux |
-| Windows, no Docker, WSL Ubuntu | Re-runs `yarn start` inside WSL so Gotenberg is Linux |
-| Windows, WSL missing | `wsl --install -d Ubuntu` (reboot once), or Hyper-V: `scripts/windows/setup-hyperv-ubuntu.ps1` |
-
-Use `yarn start:worker` / `yarn dev:worker` only when scaling extra workers. Use `PDF_ENSURE_SKIP=1` to skip probes (CI / already-provisioned hosts).
-
-Local API keys are defined in `API_KEYS` as `key:ownerId:keyId`. The example key is `dev-local-key`.
+`yarn start` / `yarn dev` run `scripts/ensure-runtime.mjs` first: they copy `.env` if needed, start Gotenberg when Docker (or a Linux binary) is available, then boot the API. Use `PDF_ENSURE_SKIP=1` to skip probes.
 
 ```bash
 curl -X POST http://localhost:3050/v1/pdf/convert \
-  -H "Authorization: Bearer dev-local-key" \
-  -F "file=@./fixtures/documents/basic.docx"
+  -F "file=@./fixtures/documents/basic.docx" \
+  -o out.pdf
 ```
+
+HTML with a local image or font (flat filenames only):
 
 ```bash
-curl http://localhost:3050/v1/pdf/jobs/<JOB_ID> \
-  -H "Authorization: Bearer dev-local-key"
+curl -X POST http://localhost:3050/v1/pdf/convert \
+  -F "file=@./page.html" \
+  -F "assets=@./logo.png" \
+  -o out.pdf
 ```
-
-A completed job includes a signed `output.url`. Sync conversion (`POST /v1/pdf/convert/sync`) is optional and only for small files after the async path is stable.
-
-## Configuration
-
-Copy `.env.example` for local development. Never commit `.env` or production secrets.
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `PORT` | `3050` | API listen port |
-| `DATABASE_URL` | — | PostgreSQL connection |
-| `REDIS_URL` | — | Queue backend |
-| `GOTENBERG_URL` | — | Private conversion engine |
-| `GOTENBERG_BIN` | unset | Linux Gotenberg binary; `yarn start` spawns it if the URL is not already healthy |
-| `S3_ENDPOINT` / `S3_BUCKET` / `S3_*` | — | Object storage |
-| `PDF_MAX_FILE_SIZE_MB` | `25` | Upload ceiling |
-| `PDF_MAX_PAGES` | `300` | Output page ceiling |
-| `PDF_JOB_TIMEOUT_SECONDS` | `120` | Per-job timeout |
-| `PDF_WORKER_CONCURRENCY` | `2` | In-flight conversions per worker |
-| `PDF_JOB_RETENTION_HOURS` | `24` | Object and job TTL |
-| `SIGNED_URL_EXPIRES_SECONDS` | `900` | Download URL lifetime |
-| `API_RATE_LIMIT_MAX` | `30` | Requests per window |
-| `API_RATE_LIMIT_WINDOW_SECONDS` | `60` | Rate-limit window |
-
-Full list and Docker topology: [docs/deployment.md](docs/deployment.md).
 
 ## API
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `POST` | `/v1/pdf/convert` | Enqueue a conversion (`multipart/form-data`) |
-| `GET` | `/v1/pdf/jobs/:jobId` | Job status and signed download URL |
-| `DELETE` | `/v1/pdf/jobs/:jobId` | Cancel or expire a job |
-| `POST` | `/v1/pdf/convert/sync` | Optional small-file synchronous convert |
+| `POST` | `/v1/pdf/convert` | Convert a file and return the PDF |
 | `GET` | `/health` | Process liveness |
-| `GET` | `/ready` | PostgreSQL, Redis, Gotenberg, storage |
+| `GET` | `/ready` | Gotenberg readiness |
+| `GET` | `/docs` | OpenAPI UI (when enabled) |
 
-Enqueue response:
+`POST /v1/pdf/convert` is `multipart/form-data`.
 
-```json
-{
-  "success": true,
-  "jobId": "pdf_01JXYZ...",
-  "status": "queued"
-}
-```
+| Field | Required | Purpose |
+| --- | --- | --- |
+| `file` | yes | The document or image |
+| `assets` | no | Extra HTML files (css, images, fonts). Repeat the field. |
+| `pageSize` | no | `auto`, `A4`, `LETTER`, … |
+| `orientation` | no | `auto`, `portrait`, `landscape` |
+| `fit` | no | Image fit: `contain`, `cover`, `original` |
+| `options` | no | JSON object that overrides the fields above |
 
-Job states: `queued`, `processing`, `completed`, `failed`, `cancelled`, `expired`.
+Success: `200` with `Content-Type: application/pdf`.
+
+Headers on success: `Content-Disposition`, `X-Page-Count`, `X-Conversion-Engine`, `X-Request-Id`.
 
 Error envelope:
 
@@ -203,33 +126,23 @@ Error envelope:
 }
 ```
 
-Send `Idempotency-Key` to make retries safe. Request schemas, codes, and auth: [docs/api.md](docs/api.md).
+## Configuration
 
-## Security
+Copy `.env.example`. Never commit `.env`.
 
-- Authenticate every conversion endpoint in production
-- Scope job reads and deletes to the owning principal
-- Validate filename, extension, MIME type, magic bytes, and size
-- Scan malware before enqueue when a scanner is configured
-- Isolate Gotenberg: internal network, pinned image, resource limits, no host mounts
-- Keep buckets private; issue short-lived signed URLs
-- Never interpolate user input into a shell command
-- Never log document contents, secrets, or signed URLs
-
-Details and the security test list: [docs/security.md](docs/security.md).
-
-## Operations
-
-| Concern | Behavior |
-| --- | --- |
-| Logs | JSON via Pino; `requestId` + `jobId` on every hop |
-| Metrics | Conversion counts, duration, queue depth, bytes |
-| Health | `/health` liveness, `/ready` dependency checks |
-| Cleanup | Temp dirs deleted in `finally`; scheduled object/job TTL |
-| Shutdown | Drain in-flight work on `SIGTERM` / `SIGINT` |
-| Failure | Retry recoverable errors; fail permanent input errors; reclaim stale jobs |
-
-Playbook: [docs/operations.md](docs/operations.md).
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PORT` | `3050` | API listen port |
+| `GOTENBERG_URL` | — | Private conversion engine |
+| `GOTENBERG_BIN` | unset | Linux Gotenberg binary; `yarn start` spawns it if the URL is not already healthy |
+| `PDF_MAX_FILE_SIZE_MB` | `25` | Upload ceiling |
+| `PDF_MAX_PAGES` | `300` | Output page ceiling |
+| `PDF_JOB_TIMEOUT_SECONDS` | `120` | Per-request conversion timeout |
+| `PDF_MAX_CONCURRENT_JOBS` | `2` | In-flight conversions |
+| `PDF_MAX_HTML_ASSETS` | `32` | Extra HTML files per request |
+| `PDF_TEMP_DIR` | `/tmp/pdf-service` | Request-scoped local folder |
+| `API_RATE_LIMIT_MAX` | `30` | Requests per window |
+| `API_RATE_LIMIT_WINDOW_SECONDS` | `60` | Rate-limit window |
 
 ## Development
 
@@ -240,55 +153,15 @@ yarn test
 docker compose config
 ```
 
-TypeScript strict mode, small modules, centralized errors and configuration, no silent catches. Inspect existing Prisma, Redis, logging, and Docker setup before adding parallel infrastructure.
-
-Phased build order, fixtures, visual regression, and the quality bar: [docs/development.md](docs/development.md).
-
-### First milestone
-
-Ship a stable pipeline for **JPG, JPEG, PNG, DOC, DOCX** with async jobs, storage, auth, rate limits, validation, health checks, structured logs, Docker, and automated tests. Expand formats only after that core path is reliable.
-
-## Acceptance criteria
-
-The service is not production-ready until these hold.
-
-**Functional**
-
-- [ ] JPG, JPEG, PNG, DOC, DOCX, DOCM, DOT, DOTX, RTF, ODT, TXT convert to valid PDFs
-- [ ] A4, A5, Letter, Legal, and custom page sizes work
-- [ ] Portrait, landscape, and automatic image orientation work
-- [ ] Image aspect ratio is preserved
-- [ ] Office `pageSize=auto` preserves the source page configuration
-- [ ] Generated PDFs pass validation and are downloadable via signed URL
-
-**Reliability**
-
-- [ ] Recoverable failures retry; permanent failures do not
-- [ ] Stale `processing` jobs recover; worker/API restarts do not lose queued work
-- [ ] Temporary files and expired objects are cleaned up
-- [ ] Storage and Gotenberg failures are handled
-
-**Security**
-
-- [ ] Size, MIME, and magic-byte limits enforced
-- [ ] Path traversal and shell injection blocked
-- [ ] Cross-tenant job access denied
-- [ ] Rate limiting enabled; Gotenberg not public
-- [ ] Secrets uncommitted; sensitive values unlogged
-
-**Production**
-
-- [ ] Non-root Docker image, resource limits, graceful shutdown
-- [ ] `/health` and `/ready`, structured logs, metrics, OpenAPI
-- [ ] Prisma migrations, Redis reconnect, automated and visual tests
+The Compose stack is API + Gotenberg. Gotenberg is built from `docker/gotenberg/Dockerfile` so Bengali and Noto fonts are installed.
 
 ## Documentation
 
 | Document | Topic |
 | --- | --- |
-| [Architecture](docs/architecture.md) | Engines, queue, storage, data model |
-| [API](docs/api.md) | Endpoints, schemas, errors, idempotency |
-| [Security](docs/security.md) | Validation, isolation, secrets |
-| [Deployment](docs/deployment.md) | Compose, images, env, health |
-| [Operations](docs/operations.md) | Logs, metrics, cleanup, runbook |
-| [Development](docs/development.md) | Structure, tests, implementation phases |
+| [Architecture](docs/architecture.md) | Engines, request flow, temp files |
+| [API](docs/api.md) | Endpoint, fields, errors |
+| [Security](docs/security.md) | Validation, isolation |
+| [Deployment](docs/deployment.md) | Compose, images, env |
+| [Operations](docs/operations.md) | Logs, metrics, runbook |
+| [Development](docs/development.md) | Structure, tests |

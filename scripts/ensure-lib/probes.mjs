@@ -1,6 +1,5 @@
 import net from 'node:net';
 import { readFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
 
 export const COMPOSE_PROJECT = 'pdf-converter-api';
 export const PORT_SCAN = 20;
@@ -9,14 +8,6 @@ export function parseHostPort(rawUrl, fallbackPort) {
   const parsed = new URL(rawUrl);
   const port = parsed.port ? Number(parsed.port) : fallbackPort;
   return { host: parsed.hostname, port };
-}
-
-export function postgresTarget(databaseUrl) {
-  return parseHostPort(databaseUrl, 5432);
-}
-
-export function redisTarget(redisUrl) {
-  return parseHostPort(redisUrl, 6379);
 }
 
 export function gotenbergTarget(gotenbergUrl) {
@@ -66,17 +57,6 @@ export function pickPort(preferred, input) {
   return { port: input.nextFree, reason: 'foreign' };
 }
 
-export async function probeHttpHealth(baseUrl, timeoutMs = 2_000) {
-  try {
-    const response = await fetch(`${baseUrl.replace(/\/$/, '')}/health`, {
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    return response.ok;
-  } catch {
-    return false;
-  }
-}
-
 export async function isOurGotenberg(baseUrl, timeoutMs = 2_000) {
   try {
     const response = await fetch(`${baseUrl.replace(/\/$/, '')}/health`, {
@@ -87,44 +67,6 @@ export async function isOurGotenberg(baseUrl, timeoutMs = 2_000) {
     }
     const text = await response.text();
     return /gotenberg|libreoffice|chromium/i.test(text);
-  } catch {
-    return false;
-  }
-}
-
-export function isOurPostgres(databaseUrl, exec = spawnSync) {
-  try {
-    const parsed = new URL(databaseUrl);
-    if (decodeURIComponent(parsed.username) !== 'pdf') {
-      return false;
-    }
-    if (parsed.pathname.replace(/^\//, '') !== 'pdf_service') {
-      return false;
-    }
-    const result = exec('psql', [databaseUrl, '-v', 'ON_ERROR_STOP=1', '-Atc', 'SELECT current_database();'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 4_000,
-      env: {
-        ...process.env,
-        PGPASSWORD: decodeURIComponent(parsed.password ?? ''),
-        PGCONNECT_TIMEOUT: '3',
-      },
-    });
-    return result.status === 0 && String(result.stdout).trim() === 'pdf_service';
-  } catch {
-    return false;
-  }
-}
-
-export function isOurRedis(redisUrl, env) {
-  if (env.PDF_ENSURE_REDIS_CLAIMED !== '1') {
-    return false;
-  }
-  try {
-    const claimed = redisTarget(env.REDIS_URL ?? redisUrl);
-    const current = redisTarget(redisUrl);
-    return claimed.host === current.host && claimed.port === current.port;
   } catch {
     return false;
   }

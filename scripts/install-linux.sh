@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# One-time Linux host install: Node, PostgreSQL, Redis, LibreOffice, fonts, Gotenberg binary.
+# One-time Linux host install: Node, LibreOffice, Chromium, fonts, Gotenberg binary.
 # Does not require Docker at runtime. Prefer Docker Compose when the daemon is available.
 
 GOTENBERG_VERSION="${GOTENBERG_VERSION:-8.21.0}"
@@ -61,12 +61,10 @@ install_available() {
   fi
 }
 
-log "Installing Node.js 22, PostgreSQL, Redis, LibreOffice, Chromium, and fonts..."
+log "Installing Node.js 22, LibreOffice, Chromium, and fonts..."
 
 install_available \
   ca-certificates curl gnupg git \
-  postgresql postgresql-contrib \
-  redis-server \
   libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw python3 python3-uno \
   chromium chromium-browser \
   qpdf libimage-exiftool-perl default-jre-headless \
@@ -81,65 +79,6 @@ if ! command -v node >/dev/null 2>&1 || ! node -e 'process.exit(Number(process.v
 fi
 
 corepack enable >/dev/null 2>&1 || true
-
-port_busy() {
-  local port="$1"
-  bash -c "echo >/dev/tcp/127.0.0.1/${port}" >/dev/null 2>&1
-}
-
-SKIP_PG=0
-if port_busy 5432; then
-  if PGPASSWORD=pdf psql -h 127.0.0.1 -U pdf -d pdf_service -c 'SELECT 1' >/dev/null 2>&1; then
-    log "Using existing pdf_service on port 5432."
-  else
-    log "Port 5432 is in use by another PostgreSQL. Not modifying or stopping it."
-    SKIP_PG=1
-  fi
-elif command -v systemctl >/dev/null 2>&1; then
-  if ! systemctl is-active --quiet postgresql && ! systemctl is-active --quiet postgresql@16-main; then
-    systemctl enable --now postgresql >/dev/null 2>&1 || true
-  else
-    log "PostgreSQL is already running; leaving it as-is."
-  fi
-fi
-
-SKIP_REDIS=0
-if port_busy 6379; then
-  log "Port 6379 is in use. Not starting or stopping Redis."
-  SKIP_REDIS=1
-elif command -v systemctl >/dev/null 2>&1; then
-  if ! systemctl is-active --quiet redis-server && ! systemctl is-active --quiet redis; then
-    systemctl enable --now redis-server >/dev/null 2>&1 || systemctl enable --now redis >/dev/null 2>&1 || true
-  else
-    log "Redis is already running; leaving it as-is."
-  fi
-fi
-
-if [[ "${SKIP_PG}" -eq 0 ]] && command -v pg_isready >/dev/null 2>&1; then
-  for _ in $(seq 1 30); do
-    if pg_isready -q; then
-      break
-    fi
-    sleep 0.5
-  done
-fi
-
-if [[ "${SKIP_PG}" -eq 0 ]] && command -v psql >/dev/null 2>&1; then
-  log "Ensuring PostgreSQL role and database exist..."
-  sudo -u postgres psql -v ON_ERROR_STOP=1 >/dev/null <<'SQL'
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'pdf') THEN
-    CREATE ROLE pdf LOGIN PASSWORD 'pdf';
-  END IF;
-END
-$$;
-SQL
-  if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='pdf_service'" | grep -q 1; then
-    sudo -u postgres psql -c "CREATE DATABASE pdf_service OWNER pdf;" >/dev/null
-  fi
-fi
-
 fc-cache -f >/dev/null 2>&1 || true
 
 install -d -m 0755 "${INSTALL_PREFIX}/bin"
@@ -225,9 +164,7 @@ set_env() {
 }
 
 set_env NODE_ENV production
-set_env STORAGE_DRIVER fs
-set_env STORAGE_FS_ROOT /var/lib/pdf-service/objects
-set_env PDF_TEMP_DIR /var/lib/pdf-service/tmp
+set_env PDF_TEMP_DIR /tmp/pdf-service
 set_env GOTENBERG_URL http://127.0.0.1:3000
 set_env GOTENBERG_REQUIRED true
 if [[ -x "${GOTENBERG_BIN}" ]]; then
@@ -243,9 +180,8 @@ if [[ -n "${CHROMIUM_BIN}" ]]; then
   set_env CHROMIUM_BIN_PATH "${CHROMIUM_BIN}"
 fi
 
-install -d -m 0755 /var/lib/pdf-service/objects /var/lib/pdf-service/tmp
+install -d -m 0755 /tmp/pdf-service
 if id -u "${APP_USER}" >/dev/null 2>&1 && [[ "${APP_USER}" != "root" ]]; then
-  chown -R "${APP_USER}:${APP_USER}" /var/lib/pdf-service
   chown "${APP_USER}:${APP_USER}" "${ENV_FILE}" || true
 fi
 
@@ -276,19 +212,15 @@ cat <<EOF
 
 Linux host is ready for Gotenberg-level conversion without Docker at runtime.
 
-  PostgreSQL   localhost:5432  pdf/pdf  db=pdf_service
-  Redis        localhost:6379
-  Storage      STORAGE_DRIVER=fs  (/var/lib/pdf-service/objects)
   Gotenberg    ${GOTENBERG_BIN:-not installed}
   App env      ${ENV_FILE}
 
 From the repo:
 
-  yarn prisma:migrate
   yarn build
   yarn start
 
-yarn start launches the API, the worker, and local Gotenberg when GOTENBERG_BIN is set
+yarn start launches the API and local Gotenberg when GOTENBERG_BIN is set
 and nothing is already listening on GOTENBERG_URL.
 
 If Docker is available, yarn infra remains the preferred way to run Gotenberg.

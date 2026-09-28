@@ -6,17 +6,11 @@
 import { COMPOSE_PROJECT } from './probes.mjs';
 
 export function composeUpArgs(services) {
-  return ['compose', '-p', COMPOSE_PROJECT, 'up', '-d', ...services];
+  return ['compose', '-p', COMPOSE_PROJECT, 'up', '-d', '--build', ...services];
 }
 
 export function missingComposeServices(facts) {
   const services = [];
-  if (!facts.postgresUp) {
-    services.push('postgres');
-  }
-  if (!facts.redisUp) {
-    services.push('redis');
-  }
   if (!facts.gotenbergUp) {
     services.push('gotenberg');
   }
@@ -25,10 +19,6 @@ export function missingComposeServices(facts) {
 
 export function conversionReady(facts) {
   return facts.gotenbergUp || facts.gotenbergBin;
-}
-
-export function dataReady(facts) {
-  return facts.postgresUp && facts.redisUp;
 }
 
 /**
@@ -46,19 +36,19 @@ export function decideInfra(facts) {
       }
       return { action: 'compose', services };
     }
-    if (dataReady(facts) && conversionReady(facts)) {
+    if (conversionReady(facts)) {
       return { action: 'ready' };
     }
     if (facts.wslUbuntu) {
       return {
         action: 'reexec-wsl',
-        message: 'Docker is not available on Windows. Re-running inside WSL Ubuntu so Gotenberg can convert Office files.',
+        message: 'Docker is not available on Windows. Re-running inside WSL Ubuntu so Gotenberg can convert Office and HTML files.',
       };
     }
     if (facts.wslInstallable) {
       return {
         action: 'install-wsl',
-        message: 'Office conversion needs Linux Gotenberg. Install WSL Ubuntu, reboot if asked, then run yarn start again.',
+        message: 'Office and HTML conversion need Linux Gotenberg. Install WSL Ubuntu, reboot if asked, then run yarn start again.',
       };
     }
     return {
@@ -68,7 +58,7 @@ export function decideInfra(facts) {
     };
   }
 
-  if (dataReady(facts) && conversionReady(facts)) {
+  if (conversionReady(facts)) {
     return { action: 'ready' };
   }
 
@@ -80,32 +70,18 @@ export function decideInfra(facts) {
     return { action: 'compose', services };
   }
 
-  if (facts.hostPostgresBusyForeign || facts.hostRedisBusyForeign) {
-    return {
-      action: 'blocked-ports',
-      message:
-        'Default Postgres/Redis ports are in use by another project. Start Docker so this app can bind private ports, or set DATABASE_URL/REDIS_URL to this service. Existing servers will not be stopped.',
-    };
-  }
-
   if (platform === 'linux') {
     return {
       action: 'install-linux',
-      message: 'Docker is not available. Installing Postgres, Redis, LibreOffice, fonts, and Gotenberg via scripts/install-linux.sh.',
+      message: 'Docker is not available. Installing LibreOffice, Chromium, fonts, and Gotenberg via scripts/install-linux.sh.',
     };
   }
 
   if (platform === 'darwin') {
-    if (!dataReady(facts)) {
-      return {
-        action: 'brew-infra',
-        message: 'Docker is not available. Starting Postgres and Redis with Homebrew.',
-      };
-    }
     return {
       action: 'ready-images-only',
       message:
-        'Postgres and Redis are up, but Gotenberg is not. JPG/PNG will work. DOC/DOCX need Docker Desktop or a Linux host.',
+        'Gotenberg is not running. JPG/PNG/WebP will work. Office and HTML conversion need Docker Desktop or a Linux host.',
     };
   }
 

@@ -1,16 +1,8 @@
 import type { PageDimensions, PageSizeName } from '../../common/utils/page-sizes.js';
 
-export type JobStatus =
-  | 'queued'
-  | 'processing'
-  | 'completed'
-  | 'failed'
-  | 'cancelled'
-  | 'expired';
+export type ConversionFamily = 'image' | 'office' | 'html';
 
-export type ConversionFamily = 'image' | 'office';
-
-export type ConversionEngine = 'image' | 'gotenberg';
+export type ConversionEngine = 'image' | 'libreoffice' | 'chromium';
 
 export type ImageFit = 'contain' | 'cover' | 'original';
 
@@ -50,13 +42,19 @@ export interface ConversionOptions {
   };
 }
 
+export interface ConversionAsset {
+  filename: string;
+  filePath: string;
+}
+
 export interface ConversionInput {
-  jobId: string;
+  conversionId: string;
   filePath: string;
   originalFilename: string;
   mimeType: string;
   extension: string;
   size: number;
+  assets: ConversionAsset[];
 }
 
 export interface ConversionResult {
@@ -65,23 +63,6 @@ export interface ConversionResult {
   size: number;
   pageCount: number;
   engine: ConversionEngine;
-}
-
-export interface AuthOwner {
-  ownerId: string;
-  apiKeyId: string;
-}
-
-export interface PdfQueuePayload {
-  jobId: string;
-  ownerId: string;
-  inputStorageKey: string;
-  outputStorageKey: string;
-  mimeType: string;
-  extension: string;
-  originalFilename: string;
-  conversionEngine: ConversionEngine;
-  options: ConversionOptions;
 }
 
 export interface SupportedFormat {

@@ -14,8 +14,6 @@ import {
   isOurPublishedService,
   parsePublishedPort,
   pickPort,
-  postgresTarget,
-  redisTarget,
   toWslPath,
 } from '../scripts/ensure-lib/probes.mjs';
 
@@ -23,36 +21,27 @@ const base = {
   platform: 'linux',
   inWsl: false,
   dockerUp: false,
-  postgresUp: false,
-  redisUp: false,
   gotenbergUp: false,
   gotenbergBin: false,
   wslUbuntu: false,
   wslInstallable: false,
-  hostPostgresBusyForeign: false,
-  hostRedisBusyForeign: false,
 };
 
 describe('ensure probes', () => {
-  it('parses service URLs', () => {
-    expect(postgresTarget('postgresql://pdf:pdf@localhost:5432/pdf_service')).toEqual({
-      host: 'localhost',
-      port: 5432,
-    });
-    expect(redisTarget('redis://127.0.0.1:6379')).toEqual({ host: '127.0.0.1', port: 6379 });
+  it('parses Gotenberg URLs', () => {
     expect(gotenbergTarget('http://localhost:3000')).toMatchObject({
       host: 'localhost',
       port: 3000,
       origin: 'http://localhost:3000',
     });
-    expect(parsePublishedPort('127.0.0.1:5433\n')).toBe(5433);
+    expect(parsePublishedPort('127.0.0.1:3001\n')).toBe(3001);
   });
 
   it('detects a running Compose service from docker ps output', () => {
     const running = () => ({ status: 0, stdout: 'abc123\n', stderr: '' });
     const stopped = () => ({ status: 0, stdout: '\n', stderr: '' });
-    expect(composeServiceRunning(running, 'postgres')).toBe(true);
-    expect(composeServiceRunning(stopped, 'postgres')).toBe(false);
+    expect(composeServiceRunning(running, 'gotenberg')).toBe(true);
+    expect(composeServiceRunning(stopped, 'gotenberg')).toBe(false);
   });
 
   it('claims a host port only when our Compose service is publishing it', () => {
@@ -61,12 +50,12 @@ describe('ensure probes', () => {
         return { status: 0, stdout: 'abc123\n', stderr: '' };
       }
       if (args.includes('port')) {
-        return { status: 0, stdout: '127.0.0.1:5432\n', stderr: '' };
+        return { status: 0, stdout: '127.0.0.1:3000\n', stderr: '' };
       }
       return { status: 1, stdout: '', stderr: '' };
     };
-    expect(isOurPublishedService(exec, 'postgres', 5432, 5432)).toBe(true);
-    expect(isOurPublishedService(exec, 'postgres', 5433, 5432)).toBe(false);
+    expect(isOurPublishedService(exec, 'gotenberg', 3000, 3000)).toBe(true);
+    expect(isOurPublishedService(exec, 'gotenberg', 3001, 3000)).toBe(false);
   });
 
   it('converts Windows paths for WSL', () => {
@@ -75,16 +64,16 @@ describe('ensure probes', () => {
   });
 
   it('reuses our port and allocates the next when the preferred port is foreign', () => {
-    expect(pickPort(5432, { busy: false, ours: false, nextFree: 5432 })).toEqual({
-      port: 5432,
+    expect(pickPort(3000, { busy: false, ours: false, nextFree: 3000 })).toEqual({
+      port: 3000,
       reason: 'free',
     });
-    expect(pickPort(5432, { busy: true, ours: true, nextFree: 5433 })).toEqual({
-      port: 5432,
+    expect(pickPort(3000, { busy: true, ours: true, nextFree: 3001 })).toEqual({
+      port: 3000,
       reason: 'ours',
     });
-    expect(pickPort(5432, { busy: true, ours: false, nextFree: 5433 })).toEqual({
-      port: 5433,
+    expect(pickPort(3000, { busy: true, ours: false, nextFree: 3001 })).toEqual({
+      port: 3001,
       reason: 'foreign',
     });
   });
@@ -92,20 +81,18 @@ describe('ensure probes', () => {
 
 describe('ensure decision table', () => {
   it('starts only missing Compose services when Docker is up', () => {
-    const facts = { ...base, dockerUp: true, postgresUp: true };
-    expect(missingComposeServices(facts)).toEqual(['redis', 'gotenberg']);
+    const facts = { ...base, dockerUp: true };
+    expect(missingComposeServices(facts)).toEqual(['gotenberg']);
     expect(decideInfra(facts)).toEqual({
       action: 'compose',
-      services: ['redis', 'gotenberg'],
+      services: ['gotenberg'],
     });
   });
 
-  it('is ready when all dependencies are already up', () => {
+  it('is ready when Gotenberg is already up', () => {
     expect(
       decideInfra({
         ...base,
-        postgresUp: true,
-        redisUp: true,
         gotenbergUp: true,
       }),
     ).toEqual({ action: 'ready' });
@@ -116,8 +103,6 @@ describe('ensure decision table', () => {
       decideInfra({
         ...base,
         platform: 'linux',
-        postgresUp: true,
-        redisUp: true,
         gotenbergBin: true,
       }),
     ).toEqual({ action: 'ready' });
@@ -128,16 +113,10 @@ describe('ensure decision table', () => {
     expect(plan.action).toBe('install-linux');
   });
 
-  it('uses Homebrew on macOS when Postgres or Redis are down', () => {
-    expect(decideInfra({ ...base, platform: 'darwin' }).action).toBe('brew-infra');
-  });
-
-  it('warns images-only on macOS when data services are up but Gotenberg is not', () => {
+  it('warns images-only on macOS when Gotenberg is not available', () => {
     const plan = decideInfra({
       ...base,
       platform: 'darwin',
-      postgresUp: true,
-      redisUp: true,
     });
     expect(plan.action).toBe('ready-images-only');
   });
@@ -172,33 +151,22 @@ describe('ensure decision table', () => {
       dockerUp: true,
     });
     expect(plan.action).toBe('compose');
-    expect(plan.services).toEqual(['postgres', 'redis', 'gotenberg']);
+    expect(plan.services).toEqual(['gotenberg']);
   });
 
-  it('starts Windows Node when Linux services are already reachable', () => {
+  it('starts Windows Node when Gotenberg is already reachable', () => {
     expect(
       decideInfra({
         ...base,
         platform: 'win32',
-        postgresUp: true,
-        redisUp: true,
         gotenbergUp: true,
       }),
     ).toEqual({ action: 'ready' });
   });
 
-  it('does not take over a foreign Postgres/Redis when Docker is missing', () => {
-    const plan = decideInfra({
-      ...base,
-      platform: 'darwin',
-      hostPostgresBusyForeign: true,
-    });
-    expect(plan.action).toBe('blocked-ports');
-  });
-
   it('starts isolated Compose services without down or force-recreate', () => {
-    const args = composeUpArgs(['postgres', 'redis']);
-    expect(args).toEqual(['compose', '-p', COMPOSE_PROJECT, 'up', '-d', 'postgres', 'redis']);
+    const args = composeUpArgs(['gotenberg']);
+    expect(args).toEqual(['compose', '-p', COMPOSE_PROJECT, 'up', '-d', '--build', 'gotenberg']);
     expect(isDestructiveInfraCommand(args)).toBe(false);
     expect(isDestructiveInfraCommand(['compose', 'down'])).toBe(true);
     expect(isDestructiveInfraCommand(['compose', 'up', '--force-recreate'])).toBe(true);
@@ -217,12 +185,12 @@ describe('upsertEnvFile', () => {
   it('updates keys without wiping the rest of the file', () => {
     const dir = mkdtempSync(join(tmpdir(), 'pdf-env-'));
     const filePath = join(dir, '.env');
-    writeFileSync(filePath, 'API_KEYS=keep-me\nPORT=3050\n');
-    upsertEnvFile(filePath, { PORT: '3051', DATABASE_URL: 'postgresql://pdf:pdf@127.0.0.1:5433/pdf_service' });
+    writeFileSync(filePath, 'LOG_LEVEL=info\nPORT=3050\n');
+    upsertEnvFile(filePath, { PORT: '3051', GOTENBERG_URL: 'http://127.0.0.1:3001' });
     const text = readFileSync(filePath, 'utf8');
-    expect(text).toContain('API_KEYS=keep-me');
+    expect(text).toContain('LOG_LEVEL=info');
     expect(text).toContain('PORT=3051');
-    expect(text).toContain('DATABASE_URL=postgresql://pdf:pdf@127.0.0.1:5433/pdf_service');
+    expect(text).toContain('GOTENBERG_URL=http://127.0.0.1:3001');
     expect(text).not.toContain('PORT=3050');
   });
 });

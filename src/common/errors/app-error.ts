@@ -1,4 +1,4 @@
-import { ERROR_CODES, ERROR_STATUS, type ErrorCode } from './error-codes.js';
+import { ERROR_STATUS, type ErrorCode } from './error-codes.js';
 
 export class AppError extends Error {
   readonly code: ErrorCode;
@@ -18,27 +18,8 @@ export class AppError extends Error {
     this.expose = options.expose ?? this.statusCode < 500;
     this.retryable = options.retryable ?? false;
   }
-
-  static unauthorized(message = 'Authentication required'): AppError {
-    return new AppError(ERROR_CODES.UNAUTHORIZED, message);
-  }
-
-  static forbidden(message = 'You do not have access to this job'): AppError {
-    return new AppError(ERROR_CODES.FORBIDDEN, message);
-  }
-
-  static notFound(message = 'Job not found'): AppError {
-    return new AppError(ERROR_CODES.JOB_NOT_FOUND, message);
-  }
 }
 
 export function isAppError(error: unknown): error is AppError {
   return error instanceof AppError;
-}
-
-export function isRetryableError(error: unknown): boolean {
-  if (isAppError(error)) {
-    return error.retryable;
-  }
-  return false;
 }

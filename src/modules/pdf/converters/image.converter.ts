@@ -15,11 +15,11 @@ import {
   toPoints,
   type PageDimensions,
 } from '../../../common/utils/page-sizes.js';
-import { jobTempDir } from '../../../common/utils/temp-files.js';
+import { conversionTempDir } from '../../../common/utils/temp-files.js';
 import type { ConversionInput, ConversionOptions, ConversionResult } from '../pdf.types.js';
 import type { PdfConverter } from './converter.interface.js';
 
-const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png']);
+const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
 
 export class ImageConverter implements PdfConverter {
   readonly engine = 'image' as const;
@@ -38,19 +38,25 @@ export class ImageConverter implements PdfConverter {
 
     const needsRotate = Boolean(metadata.orientation && metadata.orientation !== 1);
     const isJpeg = input.extension === '.jpg' || input.extension === '.jpeg';
+    const isWebp = input.extension === '.webp';
 
     let imageBytes = source;
     let imageWidth = metadata.width;
     let imageHeight = metadata.height;
-    let embedAsJpeg = isJpeg && !needsRotate;
+    let embedAsJpeg = isJpeg && !needsRotate && !isWebp;
 
-    if (needsRotate) {
-      const rotated = sharp(source).rotate();
-      const rotatedMeta = await rotated.metadata();
-      imageBytes = Buffer.from(await rotated.jpeg({ quality: 90 }).toBuffer());
-      imageWidth = rotatedMeta.width ?? metadata.width;
-      imageHeight = rotatedMeta.height ?? metadata.height;
-      embedAsJpeg = true;
+    if (needsRotate || isWebp) {
+      const pipeline = sharp(source).rotate();
+      if (isJpeg && !isWebp) {
+        imageBytes = Buffer.from(await pipeline.jpeg({ quality: 90 }).toBuffer());
+        embedAsJpeg = true;
+      } else {
+        imageBytes = Buffer.from(await pipeline.png().toBuffer());
+        embedAsJpeg = false;
+      }
+      const convertedMeta = await sharp(imageBytes).metadata();
+      imageWidth = convertedMeta.width ?? metadata.width;
+      imageHeight = convertedMeta.height ?? metadata.height;
     }
 
     const orientation = resolveImageOrientation(imageWidth, imageHeight, options.page.orientation);
@@ -109,7 +115,7 @@ export class ImageConverter implements PdfConverter {
       });
     }
 
-    const outputPath = join(jobTempDir(input.jobId), 'output.pdf');
+    const outputPath = join(conversionTempDir(input.conversionId), 'output.pdf');
     const bytes = await pdf.save();
     await writeFile(outputPath, bytes);
 

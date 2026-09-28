@@ -1,7 +1,6 @@
 [Unit]
-Description=PDF conversion API and worker
-After=network.target postgresql.service redis-server.service
-Wants=postgresql.service redis-server.service
+Description=PDF conversion API
+After=network.target
 
 [Service]
 Type=simple

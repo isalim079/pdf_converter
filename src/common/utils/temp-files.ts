@@ -3,18 +3,18 @@ import { join } from 'node:path';
 
 import { getConfig } from '../../app/config.js';
 
-export function jobTempDir(jobId: string): string {
-  return join(getConfig().PDF_TEMP_DIR, jobId);
+export function conversionTempDir(conversionId: string): string {
+  return join(getConfig().PDF_TEMP_DIR, conversionId);
 }
 
-export async function createJobTempDir(jobId: string): Promise<string> {
-  const dir = jobTempDir(jobId);
+export async function createConversionTempDir(conversionId: string): Promise<string> {
+  const dir = conversionTempDir(conversionId);
   await mkdir(dir, { recursive: true });
   return dir;
 }
 
-export async function removeJobTempDir(jobId: string): Promise<void> {
-  await rm(jobTempDir(jobId), { recursive: true, force: true });
+export async function removeConversionTempDir(conversionId: string): Promise<void> {
+  await rm(conversionTempDir(conversionId), { recursive: true, force: true });
 }
 
 export async function cleanupAbandonedTempDirs(maxAgeMs: number): Promise<number> {

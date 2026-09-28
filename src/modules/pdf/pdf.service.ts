@@ -1,237 +1,166 @@
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-
-import type { Prisma, PrismaClient } from '@prisma/client';
-import type { Queue } from 'bullmq';
 
 import type { AppConfig } from '../../app/config.js';
 import { AppError } from '../../common/errors/app-error.js';
 import { ERROR_CODES } from '../../common/errors/error-codes.js';
-import { sha256 } from '../../common/utils/hash.js';
-import { createSignedDownloadQuery } from '../../common/utils/signed-download.js';
-import { createJobId } from '../../common/utils/ids.js';
-import { createJobTempDir, removeJobTempDir } from '../../common/utils/temp-files.js';
+import { createConversionId } from '../../common/utils/ids.js';
+import { extensionOf, sanitizeFilename } from '../../common/utils/filenames.js';
+import { createConversionTempDir, removeConversionTempDir } from '../../common/utils/temp-files.js';
 import type { AppLogger } from '../../infrastructure/logging/logger.js';
+import type { Metrics } from '../../infrastructure/metrics/metrics.js';
+import type { ConverterResolver } from './converters/converter-resolver.js';
 import { conversionOptionsSchema, normalizePageSizeName } from './pdf.schemas.js';
 import type {
-  AuthOwner,
   ConversionEngine,
+  ConversionInput,
   ConversionOptions,
-  PdfQueuePayload,
 } from './pdf.types.js';
-import { enqueueConversion } from './queue/pdf.queue.js';
-import type { ObjectStorage } from './storage/storage.interface.js';
-import { validateUpload } from './validation/file-validator.js';
-import type { MalwareScanner } from './validation/malware-scanner.js';
+import { validateHtmlAssets, validateUpload } from './validation/file-validator.js';
+import { validatePdf } from './validation/pdf-validator.js';
 
-export interface CreateJobInput {
-  owner: AuthOwner;
+export interface ConvertFileInput {
   originalFilename: string;
   declaredMimeType?: string;
   buffer: Buffer;
   rawOptions: unknown;
-  idempotencyKey?: string;
+  assets: Array<{ originalFilename: string; buffer: Buffer }>;
   requestId: string;
-  maxBytes?: number;
+}
+
+export interface ConvertFileResult {
+  pdf: Buffer;
+  filename: string;
+  pageCount: number;
+  size: number;
+  engine: ConversionEngine;
 }
 
 export class PdfService {
+  private active = 0;
+  private readonly waiters: Array<() => void> = [];
+
   constructor(
-    private readonly prisma: PrismaClient,
-    private readonly storage: ObjectStorage,
-    private readonly queue: Queue<PdfQueuePayload>,
-    private readonly scanner: MalwareScanner,
+    private readonly resolver: ConverterResolver,
     private readonly config: AppConfig,
     private readonly logger: AppLogger,
+    private readonly metrics: Metrics,
   ) {}
 
-  async createJob(input: CreateJobInput) {
+  async convert(input: ConvertFileInput): Promise<ConvertFileResult> {
     const options = parseOptions(input.rawOptions);
     const validated = await validateUpload({
       originalFilename: input.originalFilename,
       declaredMimeType: input.declaredMimeType,
       buffer: input.buffer,
-      maxBytes: input.maxBytes ?? this.config.maxFileSizeBytes,
+      maxBytes: this.config.maxFileSizeBytes,
     });
 
-    const requestHash = sha256(
-      JSON.stringify({
-        filename: validated.filename,
-        size: validated.size,
-        mimeType: validated.mimeType,
-        options,
-      }),
-    );
+    const assets =
+      validated.format.family === 'html'
+        ? validateHtmlAssets(input.assets, {
+            maxCount: this.config.PDF_MAX_HTML_ASSETS,
+            maxBytes: this.config.maxFileSizeBytes,
+          })
+        : [];
 
-    if (input.idempotencyKey) {
-      const existing = await this.prisma.idempotencyRecord.findUnique({
-        where: {
-          ownerId_key: {
-            ownerId: input.owner.ownerId,
-            key: input.idempotencyKey,
-          },
-        },
-        include: { job: true },
-      });
-
-      if (existing) {
-        if (existing.requestHash !== requestHash) {
-          throw new AppError(
-            ERROR_CODES.IDEMPOTENCY_CONFLICT,
-            'Idempotency key was reused with a different request',
-          );
-        }
-        return existing.job;
-      }
+    if (validated.format.family !== 'html' && input.assets.length > 0) {
+      throw new AppError(ERROR_CODES.INVALID_REQUEST, 'Assets are only accepted with HTML uploads');
     }
 
-    const jobId = createJobId();
-    const inputStorageKey = `uploads/${jobId}/input${validated.extension}`;
-    const outputStorageKey = `pdf/${jobId}/output.pdf`;
-    const expiresAt = new Date(Date.now() + this.config.PDF_JOB_RETENTION_HOURS * 60 * 60 * 1000);
-
-    const tempDir = await createJobTempDir(jobId);
+    const conversionId = createConversionId();
+    const tempDir = await createConversionTempDir(conversionId);
     const inputPath = join(tempDir, `input${validated.extension}`);
+    const started = Date.now();
+
+    await this.acquire();
+    this.metrics.activeJobs.inc();
+    this.metrics.conversionInputBytes.inc(validated.size);
 
     try {
       await writeFile(inputPath, input.buffer);
-      const scan = await this.scanner.scan(inputPath);
-      if (!scan.clean) {
-        throw new AppError(ERROR_CODES.MALWARE_DETECTED, 'The uploaded file failed the malware scan');
+      const conversionAssets = [];
+      for (const asset of assets) {
+        const assetPath = join(tempDir, asset.filename);
+        await writeFile(assetPath, asset.buffer);
+        conversionAssets.push({ filename: asset.filename, filePath: assetPath });
       }
 
-      await this.storage.upload(inputStorageKey, input.buffer, validated.mimeType);
+      const conversionInput: ConversionInput = {
+        conversionId,
+        filePath: inputPath,
+        originalFilename: validated.filename,
+        mimeType: validated.mimeType,
+        extension: validated.extension,
+        size: validated.size,
+        assets: conversionAssets,
+      };
 
-      const job = await this.prisma.pdfJob.create({
-        data: {
-          id: jobId,
-          status: 'queued',
-          ownerId: input.owner.ownerId,
-          apiKeyId: input.owner.apiKeyId,
-          originalFilename: validated.filename,
-          inputMimeType: validated.mimeType,
-          inputSize: BigInt(validated.size),
-          inputStorageKey,
-          conversionEngine: validated.format.engine,
-          pageSize: options.page.size,
-          orientation: options.page.orientation,
-          options: options as unknown as Prisma.InputJsonValue,
-          expiresAt,
-        },
-      });
+      const converter = this.resolver.resolve(conversionInput);
+      const result = await converter.convert(conversionInput, options);
+      const validatedPdf = await validatePdf(result.outputPath);
+      const pdf = await readFile(result.outputPath);
 
-      if (input.idempotencyKey) {
-        await this.prisma.idempotencyRecord.create({
-          data: {
-            ownerId: input.owner.ownerId,
-            key: input.idempotencyKey,
-            jobId,
-            requestHash,
-          },
-        });
-      }
-
-      await enqueueConversion(
-        this.queue,
-        {
-          jobId,
-          ownerId: input.owner.ownerId,
-          inputStorageKey,
-          outputStorageKey,
-          mimeType: validated.mimeType,
-          extension: validated.extension,
-          originalFilename: validated.filename,
-          conversionEngine: validated.format.engine as ConversionEngine,
-          options,
-        },
-        this.config,
-      );
+      const durationMs = Date.now() - started;
+      this.metrics.conversionTotal.inc({ engine: result.engine, status: 'success' });
+      this.metrics.conversionDuration.observe({ engine: result.engine }, durationMs / 1000);
+      this.metrics.conversionOutputBytes.inc(validatedPdf.size);
 
       this.logger.info(
         {
           requestId: input.requestId,
-          jobId,
-          ownerId: input.owner.ownerId,
-          engine: validated.format.engine,
-          inputMimeType: validated.mimeType,
-          fileSize: validated.size,
+          conversionId,
+          engine: result.engine,
+          inputType: validated.extension.replace('.', ''),
+          inputSize: validated.size,
+          outputSize: validatedPdf.size,
+          pages: validatedPdf.pageCount,
+          durationMs,
         },
-        'PDF conversion queued',
+        'PDF conversion completed',
       );
 
-      return job;
+      return {
+        pdf,
+        filename: pdfFilename(validated.filename),
+        pageCount: validatedPdf.pageCount,
+        size: validatedPdf.size,
+        engine: result.engine,
+      };
     } catch (error) {
-      await this.storage.delete(inputStorageKey).catch(() => undefined);
-      await this.prisma.pdfJob.delete({ where: { id: jobId } }).catch(() => undefined);
+      this.metrics.conversionTotal.inc({
+        engine: validated.format.engine,
+        status: 'failure',
+      });
+      this.logger.error(
+        {
+          requestId: input.requestId,
+          conversionId,
+          engine: validated.format.engine,
+          errorCode: error instanceof AppError ? error.code : ERROR_CODES.CONVERSION_FAILED,
+        },
+        'PDF conversion failed',
+      );
       throw error;
     } finally {
-      await removeJobTempDir(jobId);
+      this.metrics.activeJobs.dec();
+      this.release();
+      await removeConversionTempDir(conversionId);
     }
   }
 
-  async getJobById(jobId: string) {
-    const job = await this.prisma.pdfJob.findUnique({ where: { id: jobId } });
-    if (!job) {
-      throw AppError.notFound();
+  private async acquire(): Promise<void> {
+    while (this.active >= this.config.PDF_MAX_CONCURRENT_JOBS) {
+      await new Promise<void>((resolve) => {
+        this.waiters.push(resolve);
+      });
     }
-    return job;
+    this.active += 1;
   }
 
-  async getJob(jobId: string, owner: AuthOwner) {
-    const job = await this.prisma.pdfJob.findFirst({
-      where: { id: jobId, ownerId: owner.ownerId },
-    });
-    if (!job) {
-      throw AppError.notFound();
-    }
-    return job;
-  }
-
-  async cancelJob(jobId: string, owner: AuthOwner) {
-    const job = await this.getJob(jobId, owner);
-    if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
-      return job;
-    }
-
-    await this.queue.remove(jobId).catch(() => undefined);
-
-    return this.prisma.pdfJob.update({
-      where: { id: jobId },
-      data: {
-        status: 'cancelled',
-        completedAt: new Date(),
-        errorCode: ERROR_CODES.INVALID_REQUEST,
-        errorMessage: 'Cancelled by requester',
-      },
-    });
-  }
-
-  async signedOutputUrl(outputStorageKey: string, jobId?: string): Promise<string> {
-    if (this.config.STORAGE_DRIVER === 'fs' && jobId) {
-      const query = createSignedDownloadQuery(
-        jobId,
-        this.config.SIGNED_URL_EXPIRES_SECONDS,
-        this.config.downloadSigningSecret,
-      );
-      return `${this.config.PUBLIC_URL}/v1/pdf/jobs/${jobId}/file?${query}`;
-    }
-    return this.storage.createSignedUrl(outputStorageKey, this.config.SIGNED_URL_EXPIRES_SECONDS);
-  }
-
-  async waitForCompletion(jobId: string, owner: AuthOwner, timeoutMs: number) {
-    const started = Date.now();
-    while (Date.now() - started < timeoutMs) {
-      const job = await this.getJob(jobId, owner);
-      if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
-        return job;
-      }
-      await sleep(400);
-    }
-    throw new AppError(ERROR_CODES.CONVERSION_TIMEOUT, 'Synchronous conversion timed out');
-  }
-
-  async downloadOutput(outputStorageKey: string): Promise<Buffer> {
-    return this.storage.download(outputStorageKey);
+  private release(): void {
+    this.active = Math.max(0, this.active - 1);
+    this.waiters.shift()?.();
   }
 }
 
@@ -259,8 +188,10 @@ export function parseOptions(raw: unknown): ConversionOptions {
   };
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
+function pdfFilename(original: string): string {
+  const sanitized = sanitizeFilename(original);
+  const extension = extensionOf(sanitized);
+  const base = extension ? sanitized.slice(0, -extension.length) : sanitized;
+  const name = base.length > 0 ? base : 'document';
+  return `${name}.pdf`;
 }

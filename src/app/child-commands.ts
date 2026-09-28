@@ -6,17 +6,12 @@ export interface ChildCommand {
   args: string[];
 }
 
-export interface ChildCommandSet {
-  api: ChildCommand;
-  worker: ChildCommand;
-}
-
-export function resolveChildCommands(input: {
+export function resolveChildCommand(input: {
   watch: boolean;
   entryDir: string;
   projectRoot: string;
   execPath: string;
-}): ChildCommandSet {
+}): ChildCommand {
   if (input.watch) {
     const tsxCli = join(input.projectRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
     if (!existsSync(tsxCli)) {
@@ -24,25 +19,13 @@ export function resolveChildCommands(input: {
     }
 
     return {
-      api: {
-        command: input.execPath,
-        args: [tsxCli, 'watch', '--clear-screen=false', join(input.entryDir, 'main.ts')],
-      },
-      worker: {
-        command: input.execPath,
-        args: [tsxCli, 'watch', '--clear-screen=false', join(input.entryDir, 'worker.ts')],
-      },
+      command: input.execPath,
+      args: [tsxCli, 'watch', '--clear-screen=false', join(input.entryDir, 'main.ts')],
     };
   }
 
   return {
-    api: {
-      command: input.execPath,
-      args: [join(input.entryDir, 'main.js')],
-    },
-    worker: {
-      command: input.execPath,
-      args: [join(input.entryDir, 'worker.js')],
-    },
+    command: input.execPath,
+    args: [join(input.entryDir, 'main.js')],
   };
 }

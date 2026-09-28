@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import closeWithGrace from 'close-with-grace';
 
-import { resolveChildCommands } from './app/child-commands.js';
+import { resolveChildCommand } from './app/child-commands.js';
 import { getConfig } from './app/config.js';
 import { loadEnvFile } from './app/load-env.js';
 import {
@@ -27,30 +27,8 @@ async function main(): Promise<void> {
   const projectRoot = resolve(entryDir, '..');
 
   let gotenberg: ChildProcess | undefined;
-  const children: ChildProcess[] = [];
   let shuttingDown = false;
   let stopInProgress = false;
-
-  const shutdown = async (signal: string) => {
-    shuttingDown = true;
-    if (stopInProgress) {
-      return;
-    }
-    stopInProgress = true;
-    logger.info({ signal }, 'Supervisor shutting down');
-
-    await Promise.all(children.map((child) => stopChildProcess(child, 10_000)));
-    if (gotenberg) {
-      await stopChildProcess(gotenberg, 10_000);
-    }
-  };
-
-  process.once('SIGINT', () => {
-    shuttingDown = true;
-  });
-  process.once('SIGTERM', () => {
-    shuttingDown = true;
-  });
 
   const gotenbergBin = config.GOTENBERG_BIN;
   const alreadyHealthy = await probeGotenbergHealth(config.GOTENBERG_URL);
@@ -79,26 +57,40 @@ async function main(): Promise<void> {
     logger.info({ url: config.GOTENBERG_URL }, 'Gotenberg already reachable; not spawning GOTENBERG_BIN');
   }
 
-  const commands = resolveChildCommands({
+  const command = resolveChildCommand({
     watch,
     entryDir,
     projectRoot,
     execPath: process.execPath,
   });
 
-  const api = spawn(commands.api.command, commands.api.args, {
+  const api = spawn(command.command, command.args, {
     stdio: 'inherit',
     cwd: projectRoot,
     env: process.env,
   });
-  const worker = spawn(commands.worker.command, commands.worker.args, {
-    stdio: 'inherit',
-    cwd: projectRoot,
-    env: process.env,
-  });
-  children.push(api, worker);
 
-  logger.info({ watch, concurrency: config.PDF_WORKER_CONCURRENCY }, 'API and worker started');
+  logger.info({ watch }, 'API started');
+
+  const shutdown = async (signal: string) => {
+    shuttingDown = true;
+    if (stopInProgress) {
+      return;
+    }
+    stopInProgress = true;
+    logger.info({ signal }, 'Supervisor shutting down');
+    await stopChildProcess(api, 10_000);
+    if (gotenberg) {
+      await stopChildProcess(gotenberg, 10_000);
+    }
+  };
+
+  process.once('SIGINT', () => {
+    shuttingDown = true;
+  });
+  process.once('SIGTERM', () => {
+    shuttingDown = true;
+  });
 
   const onChildExit = (name: string, code: number | null, signal: NodeJS.Signals | null) => {
     if (shuttingDown) {
@@ -112,7 +104,6 @@ async function main(): Promise<void> {
   };
 
   api.once('exit', (code, signal) => onChildExit('api', code, signal));
-  worker.once('exit', (code, signal) => onChildExit('worker', code, signal));
   if (gotenberg) {
     gotenberg.once('exit', (code, signal) => onChildExit('gotenberg', code, signal));
   }
