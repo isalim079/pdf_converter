@@ -6,12 +6,6 @@ import { describe, expect, it } from 'vitest';
 
 import { resolveChildCommand } from '../src/app/child-commands.js';
 import { loadEnvFile } from '../src/app/load-env.js';
-import {
-  buildGotenbergArgs,
-  gotenbergListenPort,
-  shouldSpawnGotenberg,
-  waitForGotenbergHealth,
-} from '../src/infrastructure/gotenberg/supervisor.js';
 
 describe('loadEnvFile', () => {
   it('sets missing variables and does not override existing ones', () => {
@@ -50,49 +44,5 @@ describe('resolveChildCommand', () => {
 
     expect(command.args).toContain('watch');
     expect(command.args.at(-1)).toMatch(/main\.ts$/);
-  });
-});
-
-describe('Gotenberg supervisor', () => {
-  it('spawns only when a binary is set and Gotenberg is not already healthy', () => {
-    expect(shouldSpawnGotenberg(undefined, false)).toBe(false);
-    expect(shouldSpawnGotenberg('/usr/local/bin/gotenberg', true)).toBe(false);
-    expect(shouldSpawnGotenberg('/usr/local/bin/gotenberg', false)).toBe(true);
-  });
-
-  it('binds Gotenberg to localhost using the configured URL port', () => {
-    expect(gotenbergListenPort('http://127.0.0.1:3000')).toBe(3000);
-    expect(buildGotenbergArgs({ timeoutSeconds: 120, baseUrl: 'http://127.0.0.1:3000' })).toEqual([
-      '--api-bind-ip=127.0.0.1',
-      '--api-port=3000',
-      '--api-timeout=120s',
-      '--libreoffice-restart-after=10',
-      '--log-level=info',
-    ]);
-  });
-
-  it('waits until a health probe succeeds', async () => {
-    let attempts = 0;
-    await waitForGotenbergHealth({
-      baseUrl: 'http://127.0.0.1:3000',
-      timeoutMs: 1_000,
-      intervalMs: 10,
-      probe: async () => {
-        attempts += 1;
-        return attempts >= 2;
-      },
-    });
-    expect(attempts).toBe(2);
-  });
-
-  it('fails when Gotenberg never becomes healthy', async () => {
-    await expect(
-      waitForGotenbergHealth({
-        baseUrl: 'http://127.0.0.1:3000',
-        timeoutMs: 40,
-        intervalMs: 10,
-        probe: async () => false,
-      }),
-    ).rejects.toThrow(/did not become healthy/);
   });
 });

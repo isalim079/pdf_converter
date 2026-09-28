@@ -12,15 +12,15 @@ Node.js REST API
 validate + temp folder
    |
    +-- images ---- local ImageConverter
-   +-- office ---- Gotenberg LibreOffice
-   +-- HTML ------ Gotenberg Chromium
+   +-- office ---- host LibreOffice (soffice)
+   +-- HTML ------ host Chrome/Chromium print-to-pdf
    |
 PDF validation
    |
 HTTP application/pdf
 ```
 
-Gotenberg is private. Clients never call it directly.
+LibreOffice and Chromium run as host binaries. The API never calls Gotenberg HTTP and does not start Docker for conversion.
 
 ## Request lifecycle
 
@@ -36,15 +36,15 @@ multipart upload
 
 ## Conversion engines
 
-| Input | Engine | Gotenberg route |
+| Input | Engine | Host command |
 | --- | --- | --- |
 | JPG, JPEG, PNG, WebP | ImageConverter | — |
-| DOC, DOCX, XLS, XLSX, PPT, PPTX, ODT, ODS, ODP, RTF, TXT, CSV, … | LibreOffice | `/forms/libreoffice/convert` |
-| HTML, HTM + optional flat assets | Chromium | `/forms/chromium/convert/html` |
+| DOC, DOCX, XLS, XLSX, PPT, PPTX, ODT, ODS, ODP, RTF, TXT, CSV, … | LibreOffice | `soffice --headless --convert-to pdf:*_pdf_Export:{JSON}` |
+| HTML, HTM + optional flat assets | Chromium | `chrome --headless --print-to-pdf --no-pdf-header-footer` |
 
 LibreOffice owns office layout. Chromium owns HTML/CSS. The API does not parse Word XML.
 
-Office default `pageSize=auto` preserves the source page configuration when LibreOffice supports it. HTML conversion always enables `printBackground` so CSS colors are not dropped. Images are never stretched.
+Office default `pageSize=auto` preserves the source page configuration when LibreOffice supports it. PDF export JSON embeds standard fonts, uses lossless image compression, quality 100, and does not reduce image resolution. Each LibreOffice job uses a unique `--env:UserInstallation` directory. Chromium print-to-pdf keeps backgrounds and CSS page size.
 
 ## Why there is no Prisma
 
@@ -52,10 +52,10 @@ Prisma and PostgreSQL existed to store async jobs, owners, and idempotency keys.
 
 ## Isolation
 
-Gotenberg processes untrusted files:
+Untrusted files are converted by host binaries:
 
-- internal Docker network, or `127.0.0.1` when `yarn start` spawns a local binary
-- pinned image version, never `latest`
-- CPU, memory, and conversion timeouts
-- no host filesystem mounts except required temp paths
+- unique LibreOffice user profile per request
+- conversion timeout per request
+- concurrent conversion cap
+- temp directories deleted in `finally`
 - no Docker socket

@@ -1,9 +1,8 @@
-import { writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { stat } from 'node:fs/promises';
 
 import { getConfig } from '../../../app/config.js';
 import { conversionTempDir } from '../../../common/utils/temp-files.js';
-import type { GotenbergClient } from '../../../infrastructure/gotenberg/client.js';
+import type { NativeEngines } from '../../../infrastructure/engines/native.js';
 import type { ConversionInput, ConversionOptions, ConversionResult } from '../pdf.types.js';
 import type { PdfConverter } from './converter.interface.js';
 
@@ -27,31 +26,28 @@ const OFFICE_EXTENSIONS = new Set([
   '.odp',
 ]);
 
-export class GotenbergConverter implements PdfConverter {
+export class LibreOfficeConverter implements PdfConverter {
   readonly engine = 'libreoffice' as const;
 
-  constructor(private readonly client: GotenbergClient) {}
+  constructor(private readonly engines: NativeEngines) {}
 
   supports(input: ConversionInput): boolean {
     return OFFICE_EXTENSIONS.has(input.extension);
   }
 
-  async convert(input: ConversionInput, options: ConversionOptions): Promise<ConversionResult> {
+  async convert(input: ConversionInput, _options: ConversionOptions): Promise<ConversionResult> {
     const timeoutMs = getConfig().PDF_JOB_TIMEOUT_SECONDS * 1000;
-    const pdf = await this.client.convertOffice({
+    const outputPath = await this.engines.convertOffice({
       filePath: input.filePath,
-      filename: `${input.conversionId}${input.extension}`,
-      options,
+      outputDir: conversionTempDir(input.conversionId),
       timeoutMs,
     });
-
-    const outputPath = join(conversionTempDir(input.conversionId), 'output.pdf');
-    await writeFile(outputPath, pdf);
+    const size = (await stat(outputPath)).size;
 
     return {
       outputPath,
       mimeType: 'application/pdf',
-      size: pdf.length,
+      size,
       pageCount: 0,
       engine: this.engine,
     };

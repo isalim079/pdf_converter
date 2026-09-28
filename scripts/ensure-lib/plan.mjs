@@ -3,90 +3,103 @@
  * Does not spawn processes.
  */
 
-import { COMPOSE_PROJECT } from './probes.mjs';
-
-export function composeUpArgs(services) {
-  return ['compose', '-p', COMPOSE_PROJECT, 'up', '-d', '--build', ...services];
-}
-
-export function missingComposeServices(facts) {
-  const services = [];
-  if (!facts.gotenbergUp) {
-    services.push('gotenberg');
+export function missingPieces(facts) {
+  const missing = [];
+  if (!facts.libreofficeBin) {
+    missing.push('libreoffice');
   }
-  return services;
+  if (!facts.chromiumBin) {
+    missing.push('chromium');
+  }
+  if (!facts.fontsPresent) {
+    missing.push('fonts');
+  }
+  return missing;
 }
 
 export function conversionReady(facts) {
-  return facts.gotenbergUp || facts.gotenbergBin;
+  return Boolean(facts.libreofficeBin && facts.chromiumBin);
 }
+
+export const HOMEBREW_INSTALL =
+  '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"';
+
+export const LINUX_PACKAGE_HINT =
+  'Install LibreOffice writer/calc/impress, Chromium, fonts-noto-core, fonts-noto-ui-core, fonts-liberation, fonts-beng, and fonts-lohit-beng-bengali.';
 
 /**
  * @param {object} facts
- * @returns {{ action: string, services?: string[], message?: string }}
+ * @returns {{ action: string, missing: string[], message?: string }}
  */
 export function decideInfra(facts) {
+  const missing = missingPieces(facts);
+  const enginesOk = conversionReady(facts);
+
+  if (missing.length === 0) {
+    return { action: 'ready', missing };
+  }
+
   const platform = facts.platform;
 
-  if (platform === 'win32' && !facts.inWsl) {
-    if (facts.dockerUp) {
-      const services = missingComposeServices(facts);
-      if (services.length === 0) {
-        return { action: 'ready' };
+  if (platform === 'darwin') {
+    if (!facts.brew) {
+      if (enginesOk) {
+        return {
+          action: 'ready',
+          missing,
+          message: 'LibreOffice and Chrome are present. Homebrew is missing, so conversion fonts were not installed.',
+        };
       }
-      return { action: 'compose', services };
-    }
-    if (conversionReady(facts)) {
-      return { action: 'ready' };
-    }
-    if (facts.wslUbuntu) {
       return {
-        action: 'reexec-wsl',
-        message: 'Docker is not available on Windows. Re-running inside WSL Ubuntu so Gotenberg can convert Office and HTML files.',
-      };
-    }
-    if (facts.wslInstallable) {
-      return {
-        action: 'install-wsl',
-        message: 'Office and HTML conversion need Linux Gotenberg. Install WSL Ubuntu, reboot if asked, then run yarn start again.',
+        action: 'need-homebrew',
+        missing,
+        message: `Homebrew is required to install conversion engines. Install it with: ${HOMEBREW_INSTALL} then run yarn start again.`,
       };
     }
     return {
-      action: 'hyperv',
-      message:
-        'This Windows host has no Docker and no WSL. Use Hyper-V Ubuntu (scripts/windows/setup-hyperv-ubuntu.ps1). Native Windows LibreOffice is not supported.',
+      action: 'brew-native',
+      missing,
+      message: 'Installing missing LibreOffice, Chrome, and conversion fonts with Homebrew.',
     };
-  }
-
-  if (conversionReady(facts)) {
-    return { action: 'ready' };
-  }
-
-  if (facts.dockerUp) {
-    const services = missingComposeServices(facts);
-    if (services.length === 0) {
-      return { action: 'ready' };
-    }
-    return { action: 'compose', services };
   }
 
   if (platform === 'linux') {
+    if (!facts.apt) {
+      if (enginesOk) {
+        return {
+          action: 'ready',
+          missing,
+          message: `LibreOffice and Chromium are present. ${LINUX_PACKAGE_HINT}`,
+        };
+      }
+      return {
+        action: 'unsupported-linux',
+        missing,
+        message: `This Linux distribution is not Debian/Ubuntu. ${LINUX_PACKAGE_HINT}`,
+      };
+    }
     return {
       action: 'install-linux',
-      message: 'Docker is not available. Installing LibreOffice, Chromium, fonts, and Gotenberg via scripts/install-linux.sh.',
+      missing,
+      message: 'Installing missing LibreOffice, Chromium, and conversion fonts with sudo apt-get.',
     };
   }
 
-  if (platform === 'darwin') {
+  if (platform === 'win32') {
     return {
-      action: 'ready-images-only',
-      message:
-        'Gotenberg is not running. JPG/PNG/WebP will work. Office and HTML conversion need Docker Desktop or a Linux host.',
+      action: 'install-windows',
+      missing,
+      message: 'Downloading and installing missing LibreOffice, Chrome, and conversion fonts with wget.',
     };
+  }
+
+  if (enginesOk) {
+    return { action: 'ready', missing };
   }
 
   return {
     action: 'unsupported',
-    message: `Unsupported platform '${platform}'. Use Linux, macOS, or Windows with WSL/Hyper-V.`,
+    missing,
+    message: `Unsupported platform '${platform}'. Use macOS, Linux, or Windows.`,
   };
 }

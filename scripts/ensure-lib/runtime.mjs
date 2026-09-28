@@ -1,25 +1,33 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { composeUpArgs, decideInfra } from './plan.mjs';
 import {
-  COMPOSE_PROJECT,
-  dockerDaemonUp,
-  findFreePort,
-  gotenbergTarget,
-  isDestructiveInfraCommand,
-  isOurGotenberg,
-  isOurPublishedService,
-  isWsl,
-  pickPort,
-  probeTcp,
-  readProcVersion,
-  toWslPath,
-  wslInstallable,
-  wslUbuntuAvailable,
-} from './probes.mjs';
+  aptGetBin,
+  brewBin,
+  curlBin,
+  debianLike,
+  detectChromiumBin,
+  detectLibreOfficeBin,
+  fontsPresent,
+  wgetBin,
+} from './bins.mjs';
+import {
+  adminCommandForMsi,
+  brewInstallArgs,
+  copyFontsInto,
+  downloadArgs,
+  extractLiberationArgs,
+  isElevatedWindows,
+  linuxPackages,
+  msiexecSilentArgs,
+  windowsDownloadPlan,
+  windowsFontDest,
+} from './install.mjs';
+import { conversionReady, decideInfra } from './plan.mjs';
+import { findFreePort, probeTcp } from './probes.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LISTEN_HOST = '127.0.0.1';
@@ -70,6 +78,9 @@ export function upsertEnvFile(filePath, updates) {
     text += '\n';
   }
   for (const [key, value] of Object.entries(updates)) {
+    if (value === undefined || value === '') {
+      continue;
+    }
     const line = `${key}=${value}`;
     const re = new RegExp(`^${key}=.*$`, 'm');
     if (re.test(text)) {
@@ -87,9 +98,6 @@ function log(message) {
 }
 
 function run(command, args, options = {}) {
-  if (isDestructiveInfraCommand(args)) {
-    throw new Error(`Refusing to run destructive infra command: ${command} ${args.join(' ')}`);
-  }
   const result = spawnSync(command, args, {
     cwd: ROOT,
     stdio: 'inherit',
@@ -109,161 +117,177 @@ function yarnCmd() {
   return process.platform === 'win32' ? 'yarn.cmd' : 'yarn';
 }
 
-async function waitFor(label, probe, timeoutMs = 60_000, intervalMs = 1_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await probe()) {
-      return;
-    }
-    await sleep(intervalMs);
-  }
-  throw new Error(`${label} did not become ready in ${timeoutMs / 1000}s`);
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-async function choosePort(host, preferred, ours) {
-  const busy = await probeTcp(host, preferred);
-  if (!busy) {
-    return pickPort(preferred, { busy: false, ours: false, nextFree: preferred });
-  }
-  if (ours) {
-    return pickPort(preferred, { busy: true, ours: true, nextFree: preferred });
-  }
-  const nextFree = await findFreePort(host, preferred + 1);
-  return pickPort(preferred, { busy: true, ours: false, nextFree });
-}
-
-export async function resolveServiceUrls(env, exec = spawnSync) {
-  const gotenbergUrl = env.GOTENBERG_URL ?? `http://${LISTEN_HOST}:3000`;
+export async function resolveApiPort(env) {
   const preferredApi = Number(env.PORT ?? 3050);
-  const gotenberg = gotenbergTarget(gotenbergUrl);
-
-  const gotenbergOurs =
-    (await isOurGotenberg(gotenberg.origin)) ||
-    isOurPublishedService(exec, 'gotenberg', gotenberg.port, 3000);
-
-  const gotenbergPick = await choosePort(LISTEN_HOST, gotenberg.port, gotenbergOurs);
   const apiBusy = await probeTcp(LISTEN_HOST, preferredApi);
   const apiPort = apiBusy ? await findFreePort(LISTEN_HOST, preferredApi + 1) : preferredApi;
-  const nextGotenbergUrl =
-    gotenbergPick.reason === 'ours' ? gotenbergUrl : `http://${LISTEN_HOST}:${gotenbergPick.port}`;
-
-  return {
-    gotenbergUrl: nextGotenbergUrl,
-    port: String(apiPort),
-    PDF_GOTENBERG_PORT: String(gotenbergPick.port),
-    gotenbergReason: gotenbergPick.reason,
-  };
+  return { port: String(apiPort), reason: apiBusy ? 'foreign' : 'free' };
 }
 
-export async function collectFacts(env, exec = spawnSync) {
+export function collectFacts(env, exec = spawnSync) {
   const platform = process.platform;
-  const inWsl = isWsl(env, platform === 'linux' ? readProcVersion() : '');
   loadDotEnv(join(ROOT, '.env'), env);
 
-  const gotenbergUrl = env.GOTENBERG_URL ?? `http://${LISTEN_HOST}:3000`;
-  const gotenberg = gotenbergTarget(gotenbergUrl);
-  const bin = env.GOTENBERG_BIN?.trim();
-  const gotenbergUp =
-    (await isOurGotenberg(gotenberg.origin)) || isOurPublishedService(exec, 'gotenberg', gotenberg.port, 3000);
+  const libreofficeBin = detectLibreOfficeBin(env.LIBREOFFICE_BIN, exec);
+  const chromiumBin = detectChromiumBin(env.CHROMIUM_BIN, exec);
 
   return {
     platform,
-    inWsl,
-    dockerUp: dockerDaemonUp(exec),
-    gotenbergUp,
-    gotenbergBin: Boolean(bin && existsSync(bin)),
-    wslUbuntu: platform === 'win32' ? wslUbuntuAvailable(exec) : false,
-    wslInstallable: wslInstallable(exec, platform),
-    gotenbergUrl,
+    libreofficeBin,
+    chromiumBin,
+    fontsPresent: fontsPresent(platform, exec),
+    brew: platform === 'darwin' ? brewBin(exec) : undefined,
+    apt: platform === 'linux' ? Boolean(aptGetBin(exec)) && debianLike((path, enc) => readFileSync(path, enc)) : false,
+    wget: wgetBin(exec),
+    curl: curlBin(exec),
   };
 }
 
-export async function applyPlan(plan, facts, env) {
+function downloadFile(url, dest, facts) {
+  mkdirSync(dirname(dest), { recursive: true });
+  if (facts.wget) {
+    run(facts.wget, downloadArgs('wget', url, dest));
+    return;
+  }
+  if (facts.curl) {
+    run(facts.curl, downloadArgs('curl', url, dest));
+    return;
+  }
+  throw new Error(`wget or curl.exe is required to download ${url}`);
+}
+
+function installBrew(missing, facts) {
+  const args = brewInstallArgs(missing);
+  if (args.length === 0) {
+    return;
+  }
+  run(facts.brew || 'brew', args);
+}
+
+function installLinux(missing) {
+  const packages = linuxPackages(missing);
+  if (packages.length === 0) {
+    return;
+  }
+  const apt = ['apt-get', 'install', '-y', '--no-install-recommends', ...packages];
+  const update = ['apt-get', 'update', '-qq'];
+  if (process.getuid && process.getuid() === 0) {
+    run('apt-get', update.slice(1));
+    run('apt-get', apt.slice(1));
+  } else {
+    run('sudo', update);
+    run('sudo', apt);
+  }
+  try {
+    run('fc-cache', ['-f']);
+  } catch {
+    // font cache refresh is best-effort
+  }
+}
+
+function collectTtfFiles(rootDir) {
+  const found = [];
+  const stack = [rootDir];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current || !existsSync(current)) {
+      continue;
+    }
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const full = join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(full);
+      } else if (/\.(ttf|otf)$/i.test(entry.name)) {
+        found.push(full);
+      }
+    }
+  }
+  return found;
+}
+
+function installWindows(missing, facts) {
+  const downloads = windowsDownloadPlan(missing);
+  if (downloads.length === 0) {
+    return;
+  }
+  const work = join(tmpdir(), 'pdf-converter-install');
+  mkdirSync(work, { recursive: true });
+  const elevated = isElevatedWindows();
+  const msiFiles = [];
+  const fontFiles = [];
+
+  for (const item of downloads) {
+    const dest = join(work, item.filename);
+    log(`Downloading ${item.id} with ${facts.wget ? 'wget' : facts.curl ? 'curl' : 'nothing'}...`);
+    downloadFile(item.url, dest, facts);
+    if (item.kind === 'msi') {
+      msiFiles.push(dest);
+    } else if (item.kind === 'font') {
+      fontFiles.push(dest);
+    } else if (item.kind === 'font-archive') {
+      const unpacked = join(work, 'liberation');
+      mkdirSync(unpacked, { recursive: true });
+      run('tar', extractLiberationArgs(dest, unpacked));
+      fontFiles.push(...collectTtfFiles(unpacked));
+    }
+  }
+
+  if (msiFiles.length > 0 && !elevated) {
+    const commands = msiFiles.map((file) => adminCommandForMsi(file)).join('\n  ');
+    throw new Error(
+      `LibreOffice/Chrome install needs an elevated Windows session. Run as Administrator:\n  ${commands}`,
+    );
+  }
+
+  for (const msi of msiFiles) {
+    run('msiexec', msiexecSilentArgs(msi));
+  }
+
+  if (fontFiles.length > 0) {
+    const destDir = windowsFontDest(elevated);
+    const copied = copyFontsInto(destDir, fontFiles);
+    log(`Installed ${copied.length} font file(s) into ${destDir}`);
+  }
+}
+
+export async function applyPlan(plan, facts, _env) {
   switch (plan.action) {
     case 'ready':
-      log('Gotenberg is reachable (this project).');
+      log('LibreOffice and Chrome/Chromium are available.');
       return;
-    case 'ready-images-only':
-      log(plan.message ?? 'Images can convert; Office and HTML conversion need Gotenberg.');
+    case 'brew-native':
+      log(plan.message ?? 'Installing missing engines with Homebrew.');
+      installBrew(plan.missing, facts);
       return;
-    case 'compose': {
-      const services = plan.services ?? [];
-      const args = composeUpArgs(services);
-      log(`Docker is up. Starting missing ${COMPOSE_PROJECT} services: ${services.join(', ')}`);
-      run('docker', args, {
-        env: {
-          ...process.env,
-          ...env,
-          PDF_GOTENBERG_PORT: env.PDF_GOTENBERG_PORT ?? '3000',
-        },
-      });
-      await waitFor('compose services', async () => {
-        const next = await collectFacts(env);
-        return services.every((service) => {
-          if (service === 'gotenberg') return next.gotenbergUp;
-          return true;
-        });
-      });
+    case 'install-linux':
+      log(plan.message ?? 'Installing missing engines with apt-get.');
+      installLinux(plan.missing);
       return;
-    }
-    case 'install-linux': {
-      log(plan.message ?? 'Installing Linux host dependencies.');
-      const script = join(ROOT, 'scripts', 'install-linux.sh');
-      if (process.getuid && process.getuid() === 0) {
-        run('bash', [script]);
-      } else {
-        run('sudo', ['bash', script]);
-      }
+    case 'install-windows':
+      log(plan.message ?? 'Installing missing engines with wget.');
+      installWindows(plan.missing, facts);
       return;
-    }
-    case 'reexec-wsl': {
-      log(plan.message ?? 'Re-running inside WSL Ubuntu.');
-      const wslDir = toWslPath(ROOT);
-      const boot = env.PDF_ENSURE_BOOT === 'dev' ? 'dev' : 'start';
-      const inner = `cd '${wslDir}' && export PDF_ENSURE_INNER=1 && yarn ${boot}`;
-      const result = spawnSync('wsl', ['-d', 'Ubuntu', '-e', 'bash', '-lc', inner], {
-        cwd: ROOT,
-        stdio: 'inherit',
-        env,
-      });
-      process.exit(result.status ?? 1);
-      return;
-    }
-    case 'install-wsl': {
-      log(plan.message ?? 'Installing WSL Ubuntu.');
-      const result = spawnSync('wsl', ['--install', '-d', 'Ubuntu'], {
-        cwd: ROOT,
-        stdio: 'inherit',
-        env,
-      });
-      console.error(
-        '\nWSL Ubuntu install was started. Reboot if Windows asks, then run yarn start again from this repo.\n',
-      );
-      process.exit(result.status === 0 ? 1 : result.status ?? 1);
-      return;
-    }
-    case 'hyperv': {
-      const script = join(ROOT, 'scripts', 'windows', 'setup-hyperv-ubuntu.ps1');
-      log(plan.message ?? 'Hyper-V Ubuntu is required.');
-      console.error(`\nRun in an elevated PowerShell:\n  powershell -ExecutionPolicy Bypass -File "${script}"\n`);
-      const result = spawnSync(
-        'powershell',
-        ['-ExecutionPolicy', 'Bypass', '-File', script],
-        { cwd: ROOT, stdio: 'inherit', env },
-      );
-      process.exit(result.status === 0 ? 1 : result.status ?? 1);
-      return;
-    }
+    case 'need-homebrew':
+    case 'unsupported-linux':
     case 'unsupported':
-      throw new Error(plan.message ?? `Unsupported platform ${facts.platform}`);
+      throw new Error(plan.message ?? `Cannot install conversion engines on ${facts.platform}`);
     default:
       throw new Error(`Unknown ensure action '${plan.action}'`);
+  }
+}
+
+function persistDetectedBins(envFile, facts, env) {
+  const updates = {};
+  if (facts.libreofficeBin) {
+    updates.LIBREOFFICE_BIN = facts.libreofficeBin;
+    env.LIBREOFFICE_BIN = facts.libreofficeBin;
+  }
+  if (facts.chromiumBin) {
+    updates.CHROMIUM_BIN = facts.chromiumBin;
+    env.CHROMIUM_BIN = facts.chromiumBin;
+  }
+  if (Object.keys(updates).length > 0) {
+    upsertEnvFile(envFile, updates);
   }
 }
 
@@ -273,7 +297,7 @@ export async function ensureRuntime(options = {}) {
   env.PDF_ENSURE_BOOT = boot;
 
   if (env.PDF_ENSURE_SKIP === '1') {
-    log('PDF_ENSURE_SKIP=1; not probing infrastructure.');
+    log('PDF_ENSURE_SKIP=1; not probing conversion engines.');
     return;
   }
 
@@ -298,25 +322,40 @@ export async function ensureRuntime(options = {}) {
     run(yarnCmd(), ['build']);
   }
 
-  const urls = await resolveServiceUrls(env);
-  const updates = {
-    GOTENBERG_URL: urls.gotenbergUrl,
-    PORT: urls.port,
-    PDF_GOTENBERG_PORT: urls.PDF_GOTENBERG_PORT,
-  };
-  upsertEnvFile(envFile, updates);
-  Object.assign(env, updates);
-  if (urls.gotenbergReason === 'foreign') {
-    log(`Another process is using port 3000; Gotenberg will use ${urls.PDF_GOTENBERG_PORT}`);
-  }
+  const urls = await resolveApiPort(env);
+  upsertEnvFile(envFile, { PORT: urls.port });
+  env.PORT = urls.port;
   if (urls.port !== '3050') {
     log(`API will listen on ${urls.port}`);
   }
 
-  const facts = await collectFacts(env);
-  const plan = decideInfra(facts);
-  log(`platform=${facts.platform} docker=${facts.dockerUp} action=${plan.action} project=${COMPOSE_PROJECT}`);
-  await applyPlan(plan, facts, env);
+  let facts = collectFacts(env);
+  let plan = decideInfra(facts);
+  log(
+    `platform=${facts.platform} action=${plan.action} missing=${plan.missing.join(',') || 'none'}`,
+  );
+
+  if (plan.action !== 'ready') {
+    await applyPlan(plan, facts, env);
+    facts = collectFacts(env);
+    plan = decideInfra(facts);
+    log(
+      `after-install action=${plan.action} missing=${plan.missing.join(',') || 'none'}`,
+    );
+  }
+
+  persistDetectedBins(envFile, facts, env);
+
+  if (!conversionReady(facts)) {
+    throw new Error(
+      plan.message ??
+        'LibreOffice and Chrome/Chromium are still missing after install. Install them and run yarn start again.',
+    );
+  }
+
+  if (plan.missing.includes('fonts')) {
+    log('Conversion fonts are still missing. Office/HTML PDFs may substitute glyphs.');
+  }
 }
 
 export function bootProcess(boot) {
@@ -340,13 +379,17 @@ export function bootProcess(boot) {
     stdio: 'inherit',
   });
 
-  return new Promise((resolve, reject) => {
+  return new Promise((resolvePromise, reject) => {
     child.once('error', reject);
     child.once('exit', (code) => {
       if (code && code !== 0) {
         process.exitCode = code;
       }
-      resolve();
+      resolvePromise();
     });
   });
+}
+
+export function cleanupInstallDir(dir) {
+  rmSync(dir, { recursive: true, force: true });
 }

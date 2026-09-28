@@ -49,7 +49,7 @@ export async function buildServer(container: AppContainer) {
   await registerErrorHandler(app);
   await registerSwagger(app, container.config);
   await registerHealthRoutes(app, {
-    gotenberg: container.gotenberg,
+    engines: container.engines,
     metrics: container.metrics,
   });
   await registerPdfRoutes(app, container.pdfService);

@@ -33,11 +33,12 @@ async function readConvertRequest(request: FastifyRequest) {
         continue;
       }
       const buffer = await part.toBuffer();
-      if (part.fieldname === 'assets') {
+      const fieldName = part.fieldname.toLowerCase();
+      if (fieldName === 'assets') {
         assets.push({ originalFilename: part.filename, buffer });
         continue;
       }
-      if (!file && (part.fieldname === 'file' || part.fieldname === 'files')) {
+      if (!file && (fieldName === 'file' || fieldName === 'files')) {
         file = {
           filename: part.filename,
           mimetype: part.mimetype,

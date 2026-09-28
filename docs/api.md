@@ -10,7 +10,7 @@ There is no authentication on this version.
 | --- | --- | --- |
 | `POST` | `/v1/pdf/convert` | Convert a file and return the PDF |
 | `GET` | `/health` | Process liveness |
-| `GET` | `/ready` | Gotenberg readiness |
+| `GET` | `/ready` | LibreOffice and Chromium readiness |
 
 OpenAPI is served at `/docs` when `SWAGGER_ENABLED=true`.
 
@@ -24,6 +24,8 @@ curl -X POST http://localhost:3050/v1/pdf/convert \
   -F "pageSize=auto" \
   -o out.pdf
 ```
+
+In Postman, use form-data with key `file` (not `File` if you want the documented name; the API also accepts `File`).
 
 HTML assets must be flat filenames (`logo.png`, not `images/logo.png`) and referenced that way in the HTML.
 
@@ -69,5 +71,6 @@ Optional fields: `pageSize`, `orientation`, `fit`, or a JSON `options` field mat
 | `CONVERSION_FAILED` | 422 |
 | `PDF_VALIDATION_FAILED` | 422 |
 | `RATE_LIMITED` | 429 |
+| `ENGINE_UNAVAILABLE` | 503 |
 | `CONVERSION_TIMEOUT` | 504 |
 | `INTERNAL_ERROR` | 500 |

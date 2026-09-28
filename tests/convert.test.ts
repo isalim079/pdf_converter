@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -7,10 +7,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { createContainer } from '../src/app/container.js';
 import { getConfig, resetConfigCache } from '../src/app/config.js';
+import { AppError } from '../src/common/errors/app-error.js';
+import { ERROR_CODES } from '../src/common/errors/error-codes.js';
 import { createLogger } from '../src/infrastructure/logging/logger.js';
 import { createMetrics } from '../src/infrastructure/metrics/metrics.js';
 import { buildServer } from '../src/app/server.js';
-import type { GotenbergClient } from '../src/infrastructure/gotenberg/client.js';
+import type { NativeEngines } from '../src/infrastructure/engines/native.js';
 import { createMinimalDocx, createMinimalPptx, createMinimalXlsx, HTML_BASIC, PNG_1X1 } from './helpers/zip.js';
 
 const tempRoots: string[] = [];
@@ -54,25 +56,33 @@ function multipart(
   };
 }
 
-async function buildApp(gotenberg: Partial<GotenbergClient> = {}) {
+async function buildApp(engines: Partial<NativeEngines> = {}) {
   const root = await mkdtemp(join(tmpdir(), 'pdf-api-'));
   tempRoots.push(root);
   process.env.PDF_TEMP_DIR = root;
-  process.env.GOTENBERG_URL = process.env.GOTENBERG_URL ?? 'http://localhost:3000';
+  process.env.ENGINES_REQUIRED = 'false';
   resetConfigCache();
 
   const pdf = await samplePdf();
-  const client = {
-    health: async () => true,
-    convertOffice: async () => pdf,
-    convertHtml: async () => pdf,
-    ...gotenberg,
-  } as GotenbergClient;
+  const client: NativeEngines = {
+    libreofficeBin: () => '/mock/soffice',
+    chromiumBin: () => '/mock/chrome',
+    convertOffice: async ({ outputDir }) => {
+      const outputPath = join(outputDir, 'output.pdf');
+      await writeFile(outputPath, pdf);
+      return outputPath;
+    },
+    convertHtml: async ({ outputPath }) => {
+      await writeFile(outputPath, pdf);
+      return outputPath;
+    },
+    ...engines,
+  };
 
   const container = createContainer({
     config: getConfig(),
     logger: createLogger(),
-    gotenberg: client,
+    engines: client,
     metrics: createMetrics(),
   });
   return { app: await buildServer(container), tempRoot: root };
@@ -91,6 +101,17 @@ describe('POST /v1/pdf/convert', () => {
     expect(response.headers['content-type']).toMatch(/application\/pdf/);
     expect(response.headers['x-conversion-engine']).toBe('image');
     expect(response.rawPayload.subarray(0, 5).toString()).toBe('%PDF-');
+    await app.close();
+  });
+
+  it('accepts a Postman File field name', async () => {
+    const { app } = await buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/pdf/convert',
+      ...multipart([{ name: 'File', filename: 'square.png', type: 'image/png', body: PNG_1X1 }]),
+    });
+    expect(response.statusCode).toBe(200);
     await app.close();
   });
 
@@ -115,11 +136,12 @@ describe('POST /v1/pdf/convert', () => {
   });
 
   it('routes HTML through Chromium and accepts a flat asset', async () => {
-    let receivedAssets = 0;
+    let htmlCalls = 0;
     const { app } = await buildApp({
-      convertHtml: async (input) => {
-        receivedAssets = input.assets.length;
-        return samplePdf();
+      convertHtml: async ({ outputPath }) => {
+        htmlCalls += 1;
+        await writeFile(outputPath, await samplePdf());
+        return outputPath;
       },
     });
 
@@ -134,7 +156,7 @@ describe('POST /v1/pdf/convert', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.headers['x-conversion-engine']).toBe('chromium');
-    expect(receivedAssets).toBe(1);
+    expect(htmlCalls).toBe(1);
     await app.close();
   });
 
@@ -205,10 +227,35 @@ describe('POST /v1/pdf/convert', () => {
     await app.close();
   });
 
-  it('allows health without a conversion engine', async () => {
+  it('allows health without requiring host engines in tests', async () => {
     const { app } = await buildApp();
     const response = await app.inject({ method: 'GET', url: '/health' });
     expect(response.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it('returns ENGINE_UNAVAILABLE when LibreOffice is missing', async () => {
+    const { app } = await buildApp({
+      convertOffice: async () => {
+        throw new AppError(ERROR_CODES.ENGINE_UNAVAILABLE, 'LibreOffice is not installed. Run yarn start.', {
+          expose: true,
+        });
+      },
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/pdf/convert',
+      ...multipart([
+        {
+          name: 'file',
+          filename: 'basic.docx',
+          type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          body: createMinimalDocx(),
+        },
+      ]),
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json().error.code).toBe('ENGINE_UNAVAILABLE');
     await app.close();
   });
 });

@@ -3,7 +3,9 @@
 ## Topology
 
 ```text
-api  →  gotenberg (private)
+api  →  host LibreOffice (soffice)
+     →  host Chrome/Chromium
+     →  local image converter
 ```
 
 Start with:
@@ -12,28 +14,23 @@ Start with:
 yarn start
 ```
 
-`yarn start` runs [scripts/ensure-runtime.mjs](../scripts/ensure-runtime.mjs), then boots the API. Validate Compose with `docker compose config`.
+`yarn start` runs [scripts/ensure-runtime.mjs](../scripts/ensure-runtime.mjs), then boots the API. Docker Compose is unused for conversion.
 
 | Environment | What `yarn start` does |
 | --- | --- |
-| Linux/macOS/Windows with Docker | Builds and starts Gotenberg from `docker/gotenberg/Dockerfile` if it is down |
-| Linux without Docker | Runs `scripts/install-linux.sh` if Gotenberg is missing, then the app |
-| macOS without Docker | Images still convert. Office/HTML need Docker Desktop or Linux Gotenberg |
-| Windows with WSL Ubuntu | Re-executes `yarn start` inside WSL |
-| Windows without Docker/WSL | `wsl --install -d Ubuntu`, or [scripts/windows/setup-hyperv-ubuntu.ps1](../scripts/windows/setup-hyperv-ubuntu.ps1) |
+| macOS | Probes `soffice` and Chrome. Missing pieces are installed with Homebrew casks (LibreOffice, Google Chrome, Noto Bengali, Liberation). If brew is missing, prints the Homebrew install command and exits. |
+| Debian/Ubuntu | `sudo apt-get install` LibreOffice writer/calc/impress, Chromium, and conversion fonts |
+| Other Linux | Fails with the package list |
+| Windows | wget or `curl.exe` downloads official LibreOffice and Chrome silent MSIs plus font files. Needs an elevated session for `msiexec /qn`. |
 
-Set `PDF_ENSURE_SKIP=1` to skip ensure.
+Set `PDF_ENSURE_SKIP=1` to skip ensure on already-provisioned hosts.
 
-Ensure never stops other projects. If `:3000` or `:3050` belong to something else, this app binds the next free localhost ports and writes them to `.env`. Compose project name is `pdf-converter-api`.
+Ensure never stops other projects. If `:3050` belongs to something else, this app binds the next free localhost port and writes it to `.env`. Detected `LIBREOFFICE_BIN` and `CHROMIUM_BIN` are also written to `.env`.
 
-### Linux without Docker
+### Linux packages
 
-`scripts/install-linux.sh` installs Node 22, LibreOffice, Chromium, Bengali and metric-compatible fonts, unoconverter, and a Gotenberg Linux binary.
-
-Set `GOTENBERG_BIN`. After ensure, `src/start.ts` spawns Gotenberg on `127.0.0.1` unless `GOTENBERG_URL` is already healthy.
+`scripts/install-linux.sh` installs Node 22, LibreOffice, Chromium, and Bengali/Noto/Liberation fonts. It does not install Gotenberg.
 
 ### Images
 
-Gotenberg is built from [docker/gotenberg/Dockerfile](../docker/gotenberg/Dockerfile) so Noto, Bengali, Liberation, and Caladea/Carlito fonts are present.
-
-The API image is a multi-stage Node 24 build. It does not include Prisma, Redis, or MinIO.
+A Docker image of the API may still exist for packaging Node, but conversion requires LibreOffice and Chrome on the same machine (or a container that includes those binaries).

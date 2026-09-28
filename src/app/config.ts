@@ -1,5 +1,13 @@
 import { z } from 'zod';
 
+const optionalPath = z
+  .string()
+  .optional()
+  .transform((value) => {
+    const trimmed = value?.trim();
+    return trimmed ? trimmed : undefined;
+  });
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3050),
@@ -9,15 +17,9 @@ const envSchema = z.object({
     .optional()
     .transform((value) => (value === undefined ? undefined : value === 'true')),
 
-  GOTENBERG_URL: z.string().url(),
-  GOTENBERG_BIN: z
-    .string()
-    .optional()
-    .transform((value) => {
-      const trimmed = value?.trim();
-      return trimmed ? trimmed : undefined;
-    }),
-  GOTENBERG_REQUIRED: z
+  LIBREOFFICE_BIN: optionalPath,
+  CHROMIUM_BIN: optionalPath,
+  ENGINES_REQUIRED: z
     .enum(['true', 'false'])
     .optional()
     .transform((value) => (value === undefined ? undefined : value === 'true')),
@@ -36,7 +38,7 @@ const envSchema = z.object({
 export type AppConfig = z.infer<typeof envSchema> & {
   maxFileSizeBytes: number;
   swaggerEnabled: boolean;
-  gotenbergRequired: boolean;
+  enginesRequired: boolean;
 };
 
 let cached: AppConfig | undefined;
@@ -48,7 +50,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ...parsed,
     maxFileSizeBytes: Math.round(parsed.PDF_MAX_FILE_SIZE_MB * 1024 * 1024),
     swaggerEnabled: parsed.SWAGGER_ENABLED ?? parsed.NODE_ENV !== 'production',
-    gotenbergRequired: parsed.GOTENBERG_REQUIRED ?? parsed.NODE_ENV === 'production',
+    enginesRequired: parsed.ENGINES_REQUIRED ?? parsed.NODE_ENV === 'production',
   };
 }
 

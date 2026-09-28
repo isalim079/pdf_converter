@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -7,14 +7,7 @@ import closeWithGrace from 'close-with-grace';
 import { resolveChildCommand } from './app/child-commands.js';
 import { getConfig } from './app/config.js';
 import { loadEnvFile } from './app/load-env.js';
-import {
-  buildGotenbergArgs,
-  probeGotenbergHealth,
-  shouldSpawnGotenberg,
-  spawnGotenbergProcess,
-  stopChildProcess,
-  waitForGotenbergHealth,
-} from './infrastructure/gotenberg/supervisor.js';
+import { stopChildProcess } from './infrastructure/engines/process.js';
 import { createLogger } from './infrastructure/logging/logger.js';
 
 loadEnvFile();
@@ -26,36 +19,8 @@ async function main(): Promise<void> {
   const entryDir = dirname(fileURLToPath(import.meta.url));
   const projectRoot = resolve(entryDir, '..');
 
-  let gotenberg: ChildProcess | undefined;
   let shuttingDown = false;
   let stopInProgress = false;
-
-  const gotenbergBin = config.GOTENBERG_BIN;
-  const alreadyHealthy = await probeGotenbergHealth(config.GOTENBERG_URL);
-  if (shouldSpawnGotenberg(gotenbergBin, alreadyHealthy) && gotenbergBin) {
-    const args = buildGotenbergArgs({
-      timeoutSeconds: config.PDF_JOB_TIMEOUT_SECONDS,
-      baseUrl: config.GOTENBERG_URL,
-    });
-    logger.info({ bin: gotenbergBin, args }, 'Starting local Gotenberg');
-    gotenberg = spawnGotenbergProcess(gotenbergBin, args);
-    gotenberg.once('error', (error) => {
-      logger.fatal({ err: error, bin: gotenbergBin }, 'Failed to spawn Gotenberg');
-      process.exit(1);
-    });
-    try {
-      await waitForGotenbergHealth({
-        baseUrl: config.GOTENBERG_URL,
-        timeoutMs: 60_000,
-      });
-    } catch (error) {
-      await stopChildProcess(gotenberg, 5_000);
-      throw error;
-    }
-    logger.info({ url: config.GOTENBERG_URL }, 'Local Gotenberg is healthy');
-  } else if (gotenbergBin) {
-    logger.info({ url: config.GOTENBERG_URL }, 'Gotenberg already reachable; not spawning GOTENBERG_BIN');
-  }
 
   const command = resolveChildCommand({
     watch,
@@ -80,9 +45,6 @@ async function main(): Promise<void> {
     stopInProgress = true;
     logger.info({ signal }, 'Supervisor shutting down');
     await stopChildProcess(api, 10_000);
-    if (gotenberg) {
-      await stopChildProcess(gotenberg, 10_000);
-    }
   };
 
   process.once('SIGINT', () => {
@@ -104,9 +66,6 @@ async function main(): Promise<void> {
   };
 
   api.once('exit', (code, signal) => onChildExit('api', code, signal));
-  if (gotenberg) {
-    gotenberg.once('exit', (code, signal) => onChildExit('gotenberg', code, signal));
-  }
 
   closeWithGrace({ delay: config.PDF_JOB_TIMEOUT_SECONDS * 1000 }, async ({ signal, err }) => {
     if (err) {

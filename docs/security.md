@@ -10,17 +10,16 @@ This version has no API authentication. Do not expose it on the public internet 
 - size limit (`PDF_MAX_FILE_SIZE_MB`)
 - HTML assets: flat names only, bounded count and total bytes
 
-Never interpolate user input into a shell command. Gotenberg is called over HTTP with `FormData`.
+Never interpolate user input into a shell command. LibreOffice and Chromium are spawned with argument arrays.
 
 ## Isolation
 
-- Gotenberg is not public
 - conversion timeout per request
+- unique LibreOffice user profile per request
 - concurrent conversion cap
 - temp directories deleted in `finally`
-- no host Docker socket
 - do not log document contents
 
 ## Fonts
 
-Install needed fonts in the Gotenberg image rather than mounting the host font directory. Missing fonts are substituted and can change layout.
+Install needed fonts on the host (`yarn start` installs Noto Bengali and Liberation when missing). Missing fonts are substituted and can change layout.
