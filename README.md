@@ -83,7 +83,7 @@ Planned, not in the first milestone: `.html`, `.htm`, `.md`.
 
 Office `pageSize=auto` keeps the source section configuration (including mixed A4/A3 and portrait/landscape). Forcing A4 is an explicit override. Images are never stretched.
 
-Bengali and mixed Bengali/English rendering is a first-class requirement. Fonts are installed in the Gotenberg image, not taken from the host.
+Bengali and mixed Bengali/English rendering is a first-class requirement. Fonts are installed in the Gotenberg image, or on the Linux host via `scripts/install-linux.sh`. Do not rely on Windows host fonts.
 
 ## Tech stack
 
@@ -106,15 +106,28 @@ Pin every dependency and container tag. Use a lockfile. Do not ship `latest` ima
 ## Quick start
 
 ```bash
-cp .env.example .env
-yarn infra
 yarn install
-yarn prisma:migrate
-yarn dev
-yarn dev:worker
+yarn start
 ```
 
-`yarn infra` starts Postgres, Redis, MinIO, and Gotenberg via Docker when the daemon is running. If Docker is not installed, it starts local Postgres and Redis instead and uses filesystem storage (`STORAGE_DRIVER=fs`).
+For development with reload:
+
+```bash
+yarn install
+yarn dev
+```
+
+`yarn start` / `yarn dev` first run `scripts/ensure-runtime.mjs`: they copy `.env` if needed, detect Linux/macOS/Windows, start or install missing Postgres/Redis/Gotenberg, then run Prisma and boot the API **and** worker together. Other apps on the machine are not stopped; busy default ports are remapped.
+
+| Environment | What ensure does |
+| --- | --- |
+| Docker daemon is up | `docker compose up -d` for any of Postgres, Redis, Gotenberg that are down |
+| Linux, no Docker | `scripts/install-linux.sh` (sudo) once, then spawn local Gotenberg |
+| macOS, no Docker | Homebrew Postgres + Redis. DOC/DOCX still need Docker Desktop or Linux |
+| Windows, no Docker, WSL Ubuntu | Re-runs `yarn start` inside WSL so Gotenberg is Linux |
+| Windows, WSL missing | `wsl --install -d Ubuntu` (reboot once), or Hyper-V: `scripts/windows/setup-hyperv-ubuntu.ps1` |
+
+Use `yarn start:worker` / `yarn dev:worker` only when scaling extra workers. Use `PDF_ENSURE_SKIP=1` to skip probes (CI / already-provisioned hosts).
 
 Local API keys are defined in `API_KEYS` as `key:ownerId:keyId`. The example key is `dev-local-key`.
 
@@ -141,6 +154,7 @@ Copy `.env.example` for local development. Never commit `.env` or production sec
 | `DATABASE_URL` | — | PostgreSQL connection |
 | `REDIS_URL` | — | Queue backend |
 | `GOTENBERG_URL` | — | Private conversion engine |
+| `GOTENBERG_BIN` | unset | Linux Gotenberg binary; `yarn start` spawns it if the URL is not already healthy |
 | `S3_ENDPOINT` / `S3_BUCKET` / `S3_*` | — | Object storage |
 | `PDF_MAX_FILE_SIZE_MB` | `25` | Upload ceiling |
 | `PDF_MAX_PAGES` | `300` | Output page ceiling |

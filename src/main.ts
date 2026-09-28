@@ -1,8 +1,11 @@
 import closeWithGrace from 'close-with-grace';
 
 import { closeContainer, createContainer } from './app/container.js';
+import { loadEnvFile } from './app/load-env.js';
 import { buildServer } from './app/server.js';
 import { cleanupAbandonedTempDirs } from './common/utils/temp-files.js';
+
+loadEnvFile();
 
 async function main(): Promise<void> {
   const container = createContainer();

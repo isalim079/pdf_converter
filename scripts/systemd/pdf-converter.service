@@ -1,0 +1,18 @@
+[Unit]
+Description=PDF conversion API and worker
+After=network.target postgresql.service redis-server.service
+Wants=postgresql.service redis-server.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/pdf-converter-api
+EnvironmentFile=/opt/pdf-converter-api/.env
+ExecStart=/usr/bin/node dist/start.js
+Restart=on-failure
+RestartSec=5
+User=pdf
+Group=pdf
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

@@ -8,11 +8,15 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "dev": "tsx watch src/main.ts",
+    "dev": "node scripts/ensure-runtime.mjs --boot=dev",
+    "dev:api": "tsx watch src/main.ts",
     "dev:worker": "tsx watch src/worker.ts",
     "infra": "bash scripts/infra.sh",
+    "install:linux": "bash scripts/install-linux.sh",
+    "ensure": "node scripts/ensure-runtime.mjs --boot=none",
     "build": "tsc -p tsconfig.build.json",
-    "start": "node dist/main.js",
+    "start": "node scripts/ensure-runtime.mjs --boot=start",
+    "start:api": "node dist/main.js",
     "start:worker": "node dist/worker.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint .",

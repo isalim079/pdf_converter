@@ -3,16 +3,17 @@
 ## Prerequisites
 
 - Node.js 24 LTS
-- Docker and Docker Compose
 - Yarn (or the repository package manager, once locked)
+- Docker and Docker Compose, **or** a Linux host installed with `scripts/install-linux.sh`
 
 ## Local setup
 
 ```bash
-docker compose up -d
 yarn install
 yarn dev
 ```
+
+`yarn dev` runs ensure (Postgres/Redis/Gotenberg as needed) then starts the API and the worker. Use `yarn dev:api` / `yarn dev:worker` only when you need a single process. Set `PDF_ENSURE_SKIP=1` to skip probes.
 
 Confirm PostgreSQL, Redis, Gotenberg, MinIO, the API, and the worker are healthy, then:
 
@@ -68,7 +69,9 @@ src/
 │   ├── errors/
 │   ├── middleware/
 │   └── utils/
-└── main.ts
+├── start.ts
+├── main.ts
+└── worker.ts
 ```
 
 ## Quality bar

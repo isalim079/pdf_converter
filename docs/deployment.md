@@ -23,10 +23,49 @@ gotenberg / redis / postgres / minio → internal only
 Start the full stack with:
 
 ```bash
-docker compose up -d
+yarn start
 ```
 
-Validate the compose file with `docker compose config` before applying changes.
+`yarn start` runs [scripts/ensure-runtime.mjs](../scripts/ensure-runtime.mjs) first, then boots the API and worker. Validate Compose with `docker compose config` when you change images.
+
+## How to run
+
+Ensure is idempotent: healthy services are left alone. Extra workers use `yarn start:worker` (no ensure, no second Gotenberg).
+
+| Environment | What `yarn start` does |
+| --- | --- |
+| Linux/macOS/Windows with Docker | Starts missing Compose services (`postgres`, `redis`, `gotenberg`). MinIO is not started when `STORAGE_DRIVER=fs`. |
+| Linux without Docker | Runs `scripts/install-linux.sh` if Postgres, Redis, or Gotenberg are missing, then Prisma, then the app |
+| macOS without Docker | Homebrew Postgres + Redis (via `scripts/infra.sh`). Office conversion still needs Docker or Linux Gotenberg |
+| Windows with WSL Ubuntu | Re-executes `yarn start` inside WSL so DOC/DOCX use Linux Gotenberg |
+| Windows without Docker/WSL | Starts `wsl --install -d Ubuntu` when possible, otherwise [scripts/windows/setup-hyperv-ubuntu.ps1](../scripts/windows/setup-hyperv-ubuntu.ps1). Does not use Windows LibreOffice |
+| Scale-out | Same app; extra `yarn start:worker` processes; shared Postgres, Redis, and storage |
+
+Set `PDF_ENSURE_SKIP=1` to skip ensure on hosts that already have infrastructure.
+
+Ensure never stops other projects: it does not run `docker compose down`, `brew services stop`, or kill foreign PIDs. It reuses Postgres/Redis/Gotenberg only after an identity check. If `:5432`, `:6379`, `:3000`, or `:3050` belong to something else, this app binds the next free localhost ports and writes them to `.env`. Compose uses project name `pdf-converter-api` so it cannot attach to another directory’s stack.
+
+### Linux without Docker
+
+`scripts/install-linux.sh` installs Node 22, PostgreSQL, Redis, LibreOffice, Chromium, Bengali and metric-compatible fonts, unoconverter, and a Gotenberg **Linux** binary (extracted from `gotenberg/gotenberg:8.21.0` when Docker is available on the build host, otherwise built from source if Go is installed).
+
+Set `GOTENBERG_BIN` to that binary. After ensure, `src/start.ts` spawns Gotenberg on `127.0.0.1` unless `GOTENBERG_URL` is already healthy.
+
+A systemd unit template lives at `scripts/systemd/pdf-converter.service`. The install script copies it to `/etc/systemd/system/pdf-converter.service` but does not enable it.
+
+### Windows (Gotenberg stays Linux)
+
+Gotenberg cannot run as a Windows `.exe`. `yarn start` on Windows without Docker prefers **WSL Ubuntu** (often one reboot after `wsl --install`).
+
+On Windows Server 2019, if WSL is unavailable, run in an elevated PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/windows/setup-hyperv-ubuntu.ps1
+```
+
+Optional: `-IsoPath C:\iso\ubuntu-22.04.5-live-server-amd64.iso`. After Ubuntu is installed in the VM, run `scripts/install-linux.sh` and `yarn start` **inside the guest**. Clients call `http://<vm-ip>:3050`.
+
+If Hyper-V and WSL are both forbidden, Gotenberg-level office conversion is not possible on that host.
 
 ## Images
 
@@ -66,6 +105,7 @@ PORT=3050
 DATABASE_URL=postgresql://user:password@postgres:5432/pdf_service
 REDIS_URL=redis://redis:6379
 GOTENBERG_URL=http://gotenberg:3000
+# GOTENBERG_BIN=/usr/local/bin/gotenberg
 
 S3_ENDPOINT=http://minio:9000
 S3_REGION=us-east-1
@@ -113,4 +153,4 @@ Do not kill a conversion process without cleanup unless its timeout has already 
 
 ## Fonts
 
-Bengali and mixed-script documents are a first-class requirement. Install and test fonts inside the Gotenberg image. Do not rely on fonts from the host.
+Bengali and mixed-script documents are a first-class requirement. Install and test fonts inside the Gotenberg image, or on the Linux host via `scripts/install-linux.sh`. Do not rely on Windows host fonts.

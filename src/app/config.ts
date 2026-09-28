@@ -22,6 +22,13 @@ const envSchema = z.object({
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().min(1),
   GOTENBERG_URL: z.string().url(),
+  GOTENBERG_BIN: z
+    .string()
+    .optional()
+    .transform((value) => {
+      const trimmed = value?.trim();
+      return trimmed ? trimmed : undefined;
+    }),
   GOTENBERG_REQUIRED: z
     .enum(['true', 'false'])
     .optional()

@@ -79,7 +79,7 @@ Gotenberg is an isolated security boundary, not a public service.
 
 | Control | Requirement |
 | --- | --- |
-| Network | Internal Docker network only |
+| Network | Internal Docker network, or bind `127.0.0.1` when spawned by `yarn start` |
 | Image | Pinned version, never `latest` |
 | Resources | CPU, memory, and conversion timeouts |
 | Filesystem | No host mounts except required temp/storage |

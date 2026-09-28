@@ -95,7 +95,7 @@ See [Deployment](./deployment.md#health-checks).
 | Timeouts | Document too large or Gotenberg saturated | Duration metrics, concurrency, resource limits |
 | `403` on job read | Ownership mismatch | Auth token vs `owner_id` |
 | Signed URL 403 | Expiry or clock skew | `SIGNED_URL_EXPIRES_SECONDS`, object key |
-| Broken Bengali glyphs | Missing fonts in Gotenberg image | Fonts baked into the conversion image |
+| Broken Bengali glyphs | Missing fonts in Gotenberg image or host | Fonts in the conversion image, or `scripts/install-linux.sh` |
 | High memory | Concurrency too high | Worker/Gotenberg RAM, benchmark suite |
 
 ## Performance baseline

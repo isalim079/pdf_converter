@@ -251,7 +251,7 @@ Optional: `qpdf --check` or an equivalent library. A corrupt PDF is a failed job
 
 Gotenberg processes untrusted files. Treat it as a security boundary:
 
-- internal Docker network only
+- internal Docker network only, or `127.0.0.1` when `yarn start` spawns a local binary
 - pinned image version, never `latest`
 - CPU, memory, and conversion timeouts
 - no host filesystem mounts except required temp/storage paths
