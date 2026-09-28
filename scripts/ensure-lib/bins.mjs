@@ -37,11 +37,42 @@ export function lookupOnPath(name, exec) {
     if (result.status !== 0) {
       return undefined;
     }
+    const first = parseWhereOutput(result.stdout);
+    if (!first) {
+      return undefined;
+    }
+    if (process.platform === 'win32') {
+      return first;
+    }
+    return existsSync(first) ? first : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function parseWhereOutput(stdout) {
+  return (
+    String(stdout)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean) || undefined
+  );
+}
+
+export function lookupViaCmd(name, exec) {
+  try {
+    const result = exec('cmd.exe', ['/c', 'where', name], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    if (result.status !== 0) {
+      return undefined;
+    }
     const first = String(result.stdout)
       .split(/\r?\n/)
       .map((line) => line.trim())
       .find(Boolean);
-    return first && existsSync(first) ? first : undefined;
+    return first || undefined;
   } catch {
     return undefined;
   }
@@ -91,6 +122,10 @@ export function curlBin(exec) {
 }
 
 export function wingetBin(exec) {
+  const fromCmd = lookupViaCmd('winget', exec);
+  if (fromCmd) {
+    return fromCmd;
+  }
   const localAppData = process.env.LOCALAPPDATA;
   return firstExisting(
     [

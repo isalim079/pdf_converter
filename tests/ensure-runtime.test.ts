@@ -4,11 +4,12 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { fontsPresent } from '../scripts/ensure-lib/bins.mjs';
+import { fontsPresent, wingetBin } from '../scripts/ensure-lib/bins.mjs';
 import {
   brewInstallArgs,
   chocoInstallPlan,
   fetchLatestLibreOfficeVersion,
+  FONT_URLS,
   libreOfficeMsiUrl,
   linuxPackages,
   msiexecSilentArgs,
@@ -126,6 +127,27 @@ describe('ensure decision table', () => {
     expect(downloads[0].url).toBe(libreOfficeMsiUrl('26.8.0'));
     expect(downloads[0].filename).toBe('LibreOffice_26.8.0_Win_x86-64.msi');
     expect(msiexecSilentArgs('C:\\temp\\lo.msi')).toEqual(['/i', 'C:\\temp\\lo.msi', '/qn', '/norestart']);
+  });
+
+  it('uses the GitHub files attachment for Liberation fonts, not a 404 release URL', () => {
+    expect(FONT_URLS.liberation).toContain('files/7261482');
+    expect(FONT_URLS.liberation).not.toContain('releases/download');
+    const fonts = windowsDownloadPlan(['fonts']);
+    expect(fonts.map((item) => item.id)).toEqual(['notoSansBengali', 'notoSerifBengali', 'liberation']);
+    expect(fonts.find((item) => item.id === 'liberation')?.url).toBe(FONT_URLS.liberation);
+  });
+
+  it('finds winget through cmd.exe when Git Bash where fails', () => {
+    const exec = (command) => {
+      if (command === 'cmd.exe') {
+        return {
+          status: 0,
+          stdout: 'C:\\Users\\Excel\\AppData\\Local\\Microsoft\\WindowsApps\\winget.exe\n',
+        };
+      }
+      return { status: 1, stdout: '' };
+    };
+    expect(wingetBin(exec)).toMatch(/winget\.exe$/i);
   });
 
   it('picks the newest LibreOffice stable version from the directory listing', () => {

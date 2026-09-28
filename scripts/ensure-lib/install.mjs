@@ -112,7 +112,7 @@ export const FONT_URLS = {
   notoSerifBengali:
     'https://github.com/google/fonts/raw/main/ofl/notoserifbengali/NotoSerifBengali%5Bwdth%2Cwght%5D.ttf',
   liberation:
-    'https://github.com/liberationfonts/liberation-fonts/releases/download/2.1.5/liberation-fonts-ttf-2.1.5.tar.gz',
+    'https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz',
 };
 
 export const LINUX_ENGINE_PACKAGES = [

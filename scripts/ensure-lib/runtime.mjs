@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -150,8 +150,21 @@ export function collectFacts(env, exec = spawnSync) {
   };
 }
 
+function hasCachedDownload(dest) {
+  try {
+    const info = statSync(dest);
+    return info.isFile() && info.size > 0;
+  } catch {
+    return false;
+  }
+}
+
 function downloadFile(url, dest, facts) {
   mkdirSync(dirname(dest), { recursive: true });
+  if (hasCachedDownload(dest)) {
+    log(`Reusing cached download ${dest}`);
+    return;
+  }
   if (facts.wget) {
     run(facts.wget, downloadArgs('wget', url, dest));
     return;
@@ -251,17 +264,27 @@ async function installWindows(missing, facts) {
 
   for (const item of downloads) {
     const dest = join(work, item.filename);
-    log(`Downloading ${item.id} with ${facts.wget ? 'wget' : facts.curl ? 'curl' : 'nothing'}...`);
-    downloadFile(item.url, dest, facts);
-    if (item.kind === 'msi') {
-      msiFiles.push(dest);
-    } else if (item.kind === 'font') {
-      fontFiles.push(dest);
-    } else if (item.kind === 'font-archive') {
-      const unpacked = join(work, 'liberation');
-      mkdirSync(unpacked, { recursive: true });
-      run('tar', extractLiberationArgs(dest, unpacked));
-      fontFiles.push(...collectTtfFiles(unpacked));
+    const optional = item.kind === 'font' || item.kind === 'font-archive';
+    try {
+      log(`Downloading ${item.id} with ${facts.wget ? 'wget' : facts.curl ? 'curl' : 'nothing'}...`);
+      downloadFile(item.url, dest, facts);
+      if (item.kind === 'msi') {
+        msiFiles.push(dest);
+      } else if (item.kind === 'font') {
+        fontFiles.push(dest);
+      } else if (item.kind === 'font-archive') {
+        const unpacked = join(work, 'liberation');
+        mkdirSync(unpacked, { recursive: true });
+        run('tar', extractLiberationArgs(dest, unpacked));
+        fontFiles.push(...collectTtfFiles(unpacked));
+      }
+    } catch (error) {
+      if (!optional) {
+        throw error;
+      }
+      log(
+        `Optional ${item.id} download skipped: ${error instanceof Error ? error.message : error}`,
+      );
     }
   }
 
