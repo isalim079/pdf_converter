@@ -1,31 +1,43 @@
 import { mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { basename, extname, join } from 'node:path';
+import { basename, extname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { AppError } from '../../common/errors/app-error.js';
 import { ERROR_CODES } from '../../common/errors/error-codes.js';
 import { runProcess } from './process.js';
 
-const WRITER = new Set(['.doc', '.docx', '.docm', '.dot', '.dotx', '.rtf', '.odt', '.txt']);
 const CALC = new Set(['.xls', '.xlsx', '.xlsm', '.ods', '.csv']);
 const IMPRESS = new Set(['.ppt', '.pptx', '.pptm', '.odp']);
 
 const PDF_EXPORT_JSON =
   '{"EmbedStandardFonts":{"type":"boolean","value":"true"},"UseLosslessCompression":{"type":"boolean","value":"true"},"Quality":{"type":"long","value":"100"},"ReduceImageResolution":{"type":"boolean","value":"false"}}';
 
-export function pdfExportFilter(extension: string): string {
+export function pdfFilterName(extension: string): string {
   const ext = extension.toLowerCase();
   if (CALC.has(ext)) {
-    return `pdf:calc_pdf_Export:${PDF_EXPORT_JSON}`;
+    return 'calc_pdf_Export';
   }
   if (IMPRESS.has(ext)) {
-    return `pdf:impress_pdf_Export:${PDF_EXPORT_JSON}`;
+    return 'impress_pdf_Export';
   }
-  if (WRITER.has(ext) || ext.startsWith('.')) {
-    return `pdf:writer_pdf_Export:${PDF_EXPORT_JSON}`;
+  return 'writer_pdf_Export';
+}
+
+export function pdfExportFilter(extension: string, platform = process.platform): string {
+  const name = pdfFilterName(extension);
+  if (platform === 'win32') {
+    return `pdf:${name}`;
   }
-  return `pdf:writer_pdf_Export:${PDF_EXPORT_JSON}`;
+  return `pdf:${name}:${PDF_EXPORT_JSON}`;
+}
+
+export function libreOfficePathForCli(filePath: string, platform = process.platform): string {
+  const absolute = platform === process.platform ? resolve(filePath) : filePath;
+  if (platform === 'win32') {
+    return absolute.replace(/\\/g, '/');
+  }
+  return absolute;
 }
 
 export function buildLibreOfficeArgs(input: {
@@ -33,19 +45,29 @@ export function buildLibreOfficeArgs(input: {
   outputDir: string;
   profileDir: string;
   extension: string;
+  platform?: NodeJS.Platform;
 }): string[] {
+  const platform = input.platform ?? process.platform;
+  const filePath = libreOfficePathForCli(input.filePath, platform);
+  const outputDir = libreOfficePathForCli(input.outputDir, platform);
+  const profileDir = platform === process.platform ? resolve(input.profileDir) : input.profileDir;
   return [
     '--headless',
     '--nologo',
     '--nofirststartwizard',
     '--norestore',
-    `-env:UserInstallation=${pathToFileURL(input.profileDir).href}`,
+    `-env:UserInstallation=${pathToFileURL(profileDir).href}`,
     '--convert-to',
-    pdfExportFilter(input.extension),
+    pdfExportFilter(input.extension, platform),
     '--outdir',
-    input.outputDir,
-    input.filePath,
+    outputDir,
+    filePath,
   ];
+}
+
+function isSourceNotLoaded(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /could not be loaded/i.test(message);
 }
 
 export async function convertOfficeFile(input: {
@@ -54,27 +76,39 @@ export async function convertOfficeFile(input: {
   outputDir: string;
   timeoutMs: number;
 }): Promise<string> {
-  const profileDir = join(input.outputDir, 'lo-profile');
+  const outputDir = resolve(input.outputDir);
+  const filePath = resolve(input.filePath);
+  const profileDir = join(outputDir, 'lo-profile');
   await mkdir(profileDir, { recursive: true });
   const args = buildLibreOfficeArgs({
-    filePath: input.filePath,
-    outputDir: input.outputDir,
+    filePath,
+    outputDir,
     profileDir,
-    extension: extname(input.filePath),
+    extension: extname(filePath),
   });
 
   try {
-    await runProcess(input.bin, args, { timeoutMs: input.timeoutMs, cwd: input.outputDir });
+    await runProcess(input.bin, args, { timeoutMs: input.timeoutMs, cwd: outputDir });
   } catch (error) {
-    if (error instanceof AppError) {
+    if (error instanceof AppError && isSourceNotLoaded(error) && pdfExportFilter(extname(filePath)).includes('{')) {
+      const retryArgs = buildLibreOfficeArgs({
+        filePath,
+        outputDir,
+        profileDir,
+        extension: extname(filePath),
+        platform: 'win32',
+      });
+      await runProcess(input.bin, retryArgs, { timeoutMs: input.timeoutMs, cwd: outputDir });
+    } else if (error instanceof AppError) {
       throw error;
+    } else {
+      throw new AppError(ERROR_CODES.CONVERSION_FAILED, 'LibreOffice failed to convert the document', {
+        cause: error,
+      });
     }
-    throw new AppError(ERROR_CODES.CONVERSION_FAILED, 'LibreOffice failed to convert the document', {
-      cause: error,
-    });
   }
 
-  const pdfPath = join(input.outputDir, `${basename(input.filePath, extname(input.filePath))}.pdf`);
+  const pdfPath = join(outputDir, `${basename(filePath, extname(filePath))}.pdf`);
   if (!existsSync(pdfPath)) {
     throw new AppError(ERROR_CODES.CONVERSION_FAILED, 'LibreOffice did not produce a PDF');
   }

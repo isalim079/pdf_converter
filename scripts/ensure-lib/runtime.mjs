@@ -332,6 +332,20 @@ export async function applyPlan(plan, facts, _env) {
   }
 }
 
+function persistWindowsTempDir(envFile, env) {
+  if (process.platform !== 'win32') {
+    return;
+  }
+  const current = env.PDF_TEMP_DIR?.trim();
+  if (current && !current.startsWith('/tmp') && !current.startsWith('/var/tmp')) {
+    return;
+  }
+  const tempDir = join(tmpdir(), 'pdf-service');
+  upsertEnvFile(envFile, { PDF_TEMP_DIR: tempDir });
+  env.PDF_TEMP_DIR = tempDir;
+  log(`PDF_TEMP_DIR set to ${tempDir}`);
+}
+
 function persistDetectedBins(envFile, facts, env) {
   const updates = {};
   if (facts.libreofficeBin) {
@@ -367,6 +381,7 @@ export async function ensureRuntime(options = {}) {
     log('Wrote .env from .env.example');
   }
   loadDotEnv(envFile, env);
+  persistWindowsTempDir(envFile, env);
 
   if (!existsSync(join(ROOT, 'node_modules'))) {
     log('Installing npm dependencies...');

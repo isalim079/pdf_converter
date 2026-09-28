@@ -9,6 +9,8 @@ export const LIBREOFFICE_CANDIDATES = [
   '/usr/bin/soffice',
   '/usr/bin/libreoffice',
   '/usr/lib/libreoffice/program/soffice',
+  'C:\\Program Files\\LibreOffice\\program\\soffice.com',
+  'C:\\Program Files (x86)\\LibreOffice\\program\\soffice.com',
   'C:\\Program Files\\LibreOffice\\program\\soffice.exe',
   'C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe',
 ];
@@ -26,7 +28,7 @@ export const CHROMIUM_CANDIDATES = [
 ];
 
 export const PATH_BIN_NAMES = {
-  libreoffice: ['soffice', 'libreoffice'],
+  libreoffice: ['soffice.com', 'soffice', 'libreoffice'],
   chromium: ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser'],
 };
 

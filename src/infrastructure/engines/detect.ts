@@ -8,6 +8,8 @@ export const LIBREOFFICE_CANDIDATES = [
   '/usr/bin/soffice',
   '/usr/bin/libreoffice',
   '/usr/lib/libreoffice/program/soffice',
+  'C:\\Program Files\\LibreOffice\\program\\soffice.com',
+  'C:\\Program Files (x86)\\LibreOffice\\program\\soffice.com',
   'C:\\Program Files\\LibreOffice\\program\\soffice.exe',
   'C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe',
 ];
@@ -57,7 +59,7 @@ export function firstExisting(paths: Array<string | undefined>): string | undefi
 }
 
 export function detectLibreOfficeBin(configured?: string): string | undefined {
-  return firstExisting([configured, ...LIBREOFFICE_CANDIDATES, 'soffice', 'libreoffice']);
+  return firstExisting([configured, ...LIBREOFFICE_CANDIDATES, 'soffice.com', 'soffice', 'libreoffice']);
 }
 
 export function detectChromiumBin(configured?: string): string | undefined {
