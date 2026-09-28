@@ -151,6 +151,19 @@ export function composePublishedPort(exec, service, containerPort) {
   }
 }
 
+export function composeServiceRunning(exec, service) {
+  try {
+    const result = exec(
+      'docker',
+      ['compose', '-p', COMPOSE_PROJECT, 'ps', '--status', 'running', '-q', service],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 8_000 },
+    );
+    return result.status === 0 && Boolean(String(result.stdout).trim());
+  } catch {
+    return false;
+  }
+}
+
 export function isOurPublishedService(exec, service, hostPort, containerPort) {
   if (!composeServiceRunning(exec, service)) {
     return false;

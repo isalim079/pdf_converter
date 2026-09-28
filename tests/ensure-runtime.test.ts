@@ -8,8 +8,10 @@ import { composeUpArgs, decideInfra, missingComposeServices } from '../scripts/e
 import { parseBootArg, upsertEnvFile } from '../scripts/ensure-lib/runtime.mjs';
 import {
   COMPOSE_PROJECT,
+  composeServiceRunning,
   gotenbergTarget,
   isDestructiveInfraCommand,
+  isOurPublishedService,
   parsePublishedPort,
   pickPort,
   postgresTarget,
@@ -44,6 +46,27 @@ describe('ensure probes', () => {
       origin: 'http://localhost:3000',
     });
     expect(parsePublishedPort('127.0.0.1:5433\n')).toBe(5433);
+  });
+
+  it('detects a running Compose service from docker ps output', () => {
+    const running = () => ({ status: 0, stdout: 'abc123\n', stderr: '' });
+    const stopped = () => ({ status: 0, stdout: '\n', stderr: '' });
+    expect(composeServiceRunning(running, 'postgres')).toBe(true);
+    expect(composeServiceRunning(stopped, 'postgres')).toBe(false);
+  });
+
+  it('claims a host port only when our Compose service is publishing it', () => {
+    const exec = (_cmd, args) => {
+      if (args.includes('ps')) {
+        return { status: 0, stdout: 'abc123\n', stderr: '' };
+      }
+      if (args.includes('port')) {
+        return { status: 0, stdout: '127.0.0.1:5432\n', stderr: '' };
+      }
+      return { status: 1, stdout: '', stderr: '' };
+    };
+    expect(isOurPublishedService(exec, 'postgres', 5432, 5432)).toBe(true);
+    expect(isOurPublishedService(exec, 'postgres', 5433, 5432)).toBe(false);
   });
 
   it('converts Windows paths for WSL', () => {
